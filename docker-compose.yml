@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: realestate_crm_mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password
+      MONGO_INITDB_DATABASE: realestate_crm
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - realestate_network
+
+  app:
+    build: .
+    container_name: realestate_crm_app
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      MONGO_URI: mongodb://admin:password@mongodb:27017/realestate_crm?authSource=admin
+      JWT_SECRET: your_super_secret_jwt_key_change_in_production
+    depends_on:
+      - mongodb
+    networks:
+      - realestate_network
+
+volumes:
+  mongodb_data:
+
+networks:
+  realestate_network:
+    driver: bridge

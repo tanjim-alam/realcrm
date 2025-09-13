@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real Estate CRM - Lead Capture Form</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Hero Section -->
+    <div class="gradient-bg min-h-screen flex items-center justify-center px-4">
+        <div class="max-w-4xl mx-auto text-center text-white">
+            <h1 class="text-5xl font-bold mb-6">Find Your Dream Home</h1>
+            <p class="text-xl mb-8 opacity-90">Discover premium properties in the best locations with our expert real estate services.</p>
+            
+            <!-- Lead Capture Form -->
+            <div class="bg-white rounded-lg shadow-2xl p-8 max-w-md mx-auto">
+                <h2 class="text-2xl font-bold text-gray-900 mb-6">Get Started Today</h2>
+                
+                <form id="leadForm" class="space-y-4">
+                    <div>
+                        <input 
+                            type="text" 
+                            id="name" 
+                            name="name"
+                            placeholder="Full Name" 
+                            required
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                    </div>
+                    
+                    <div>
+                        <input 
+                            type="email" 
+                            id="email" 
+                            name="email"
+                            placeholder="Email Address" 
+                            required
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                    </div>
+                    
+                    <div>
+                        <input 
+                            type="tel" 
+                            id="phone" 
+                            name="phone"
+                            placeholder="Phone Number" 
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                    </div>
+                    
+                    <div>
+                        <select 
+                            id="propertyType" 
+                            name="propertyType"
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                            <option value="">Select Property Type</option>
+                            <option value="apartment">Apartment</option>
+                            <option value="house">House</option>
+                            <option value="condo">Condo</option>
+                            <option value="townhouse">Townhouse</option>
+                            <option value="commercial">Commercial</option>
+                            <option value="land">Land</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <input 
+                            type="number" 
+                            id="budget" 
+                            name="budget"
+                            placeholder="Budget (₹)" 
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                    </div>
+                    
+                    <div>
+                        <input 
+                            type="text" 
+                            id="location" 
+                            name="location"
+                            placeholder="Preferred Location" 
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                    </div>
+                    
+                    <div>
+                        <textarea 
+                            id="notes" 
+                            name="notes"
+                            placeholder="Additional Requirements" 
+                            rows="3"
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        ></textarea>
+                    </div>
+                    
+                    <button 
+                        type="submit" 
+                        class="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors"
+                    >
+                        Get Free Consultation
+                    </button>
+                </form>
+                
+                <p class="text-sm text-gray-500 mt-4">
+                    By submitting this form, you agree to our privacy policy and terms of service.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Features Section -->
+    <div class="py-16 bg-white">
+        <div class="max-w-6xl mx-auto px-4">
+            <h2 class="text-3xl font-bold text-center text-gray-900 mb-12">Why Choose Us?</h2>
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div class="text-center">
+                    <div class="bg-blue-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">Premium Properties</h3>
+                    <p class="text-gray-600">Handpicked properties in the best locations with modern amenities.</p>
+                </div>
+                
+                <div class="text-center">
+                    <div class="bg-green-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">Expert Guidance</h3>
+                    <p class="text-gray-600">Professional real estate experts to guide you through every step.</p>
+                </div>
+                
+                <div class="text-center">
+                    <div class="bg-purple-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                        <svg class="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"></path>
+                        </svg>
+                    </div>
+                    <h3 class="text-xl font-semibold mb-2">Best Prices</h3>
+                    <p class="text-gray-600">Competitive pricing with transparent costs and no hidden fees.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration - Replace with your actual values
+        const CONFIG = {
+            apiUrl: 'http://localhost:8080/api/webhooks/leads', // Fixed port number
+            companyId: 'sk_68b9a60d87cbd5d4e94ed0c2_1757006436279_qso9q751x', // Replace with actual company ID from your CRM
+            apiKey: '68b9a60d87cbd5d4e94ed0c2', // Replace with actual API key from backend/.env
+            source: 'website' // Change based on your source
+        };
+
+        // Form submission handler
+        document.getElementById('leadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const submitButton = e.target.querySelector('button[type="submit"]');
+            const originalText = submitButton.textContent;
+            
+            // Show loading state
+            submitButton.textContent = 'Submitting...';
+            submitButton.disabled = true;
+            
+            try {
+                // Collect form data
+                const formData = {
+                    name: document.getElementById('name').value,
+                    email: document.getElementById('email').value,
+                    phone: document.getElementById('phone').value,
+                    propertyType: document.getElementById('propertyType').value,
+                    budget: document.getElementById('budget').value,
+                    location: document.getElementById('location').value,
+                    notes: document.getElementById('notes').value,
+                    companyId: CONFIG.companyId,
+                    source: CONFIG.source,
+                    apiKey: CONFIG.apiKey
+                };
+                
+                // Send to CRM
+                const response = await fetch(CONFIG.apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(formData)
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Success - show thank you message
+                    alert('Thank you for your interest! We will contact you within 24 hours.');
+                    
+                    // Reset form
+                    document.getElementById('leadForm').reset();
+                    
+                    // Optional: Redirect to thank you page
+                    // window.location.href = '/thank-you';
+                } else {
+                    // Error handling
+                    alert('Error: ' + (result.message || 'Something went wrong. Please try again.'));
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Something went wrong. Please try again or contact us directly.');
+            } finally {
+                // Reset button state
+                submitButton.textContent = originalText;
+                submitButton.disabled = false;
+            }
+        });
+
+        // Optional: Add form validation
+        function validateForm() {
+            const name = document.getElementById('name').value.trim();
+            const email = document.getElementById('email').value.trim();
+            
+            if (!name) {
+                alert('Please enter your name.');
+                return false;
+            }
+            
+            if (!email) {
+                alert('Please enter your email address.');
+                return false;
+            }
+            
+            // Basic email validation
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                alert('Please enter a valid email address.');
+                return false;
+            }
+            
+            return true;
+        }
+    </script>
+</body>
+</html>
