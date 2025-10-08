@@ -21,13 +21,10 @@ const leadSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  projectName: {
-    type: String,
-    trim: true
-  },
-  budget: {
-    type: Number,
-    min: 0
+  propertyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Property',
+    required: false
   },
   propertyType: {
     type: String,
@@ -38,20 +35,6 @@ const leadSchema = new mongoose.Schema({
     type: String,
     enum: ['hot', 'warm', 'cold'],
     default: 'warm'
-  },
-  location: {
-    area: {
-      type: String,
-      trim: true
-    },
-    city: {
-      type: String,
-      trim: true
-    },
-    state: {
-      type: String,
-      trim: true
-    }
   },
   timeline: {
     type: String,
@@ -66,6 +49,11 @@ const leadSchema = new mongoose.Schema({
   assignedTo: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
+  },
+  createdBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
   reminder: {
     date: {
@@ -93,14 +81,37 @@ const leadSchema = new mongoose.Schema({
     trim: true
   },
   customFields: {
-    type: Map,
-    of: {
-      label: String,
-      value: mongoose.Schema.Types.Mixed,
-      type: String
-    },
+    type: mongoose.Schema.Types.Mixed,
     default: {}
   },
+  propertyInterests: [{
+    propertyId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Property',
+      required: true
+    },
+    interestLevel: {
+      type: String,
+      enum: ['high', 'medium', 'low'],
+      default: 'medium'
+    },
+    notes: {
+      type: String,
+      trim: true
+    },
+    viewedAt: {
+      type: Date,
+      default: Date.now
+    },
+    lastContacted: {
+      type: Date
+    },
+    status: {
+      type: String,
+      enum: ['interested', 'viewing', 'negotiating', 'offered', 'rejected', 'purchased'],
+      default: 'interested'
+    }
+  }],
   scoring: {
     score: {
       type: Number,

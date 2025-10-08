@@ -1,6 +1,7 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Lead = require('../models/Lead');
+const User = require('../models/User');
 const Subscription = require('../models/Subscription');
 const { authMiddleware } = require('../middleware/auth');
 const notificationService = require('../services/notificationService');
@@ -13,7 +14,8 @@ const router = express.Router();
 router.post('/leads', [
   body('name').notEmpty().withMessage('Name is required'),
   body('email').isEmail().withMessage('Please provide a valid email'),
-  body('phone').optional(),
+  body('phone').notEmpty().withMessage('Phone number is required'),
+  body('propertyId').optional().isMongoId().withMessage('Property ID must be a valid MongoDB ObjectId'),
   body('companyId').notEmpty().withMessage('Company ID is required'),
   body('source').notEmpty().withMessage('Lead source is required'),
   body('apiKey').notEmpty().withMessage('API key is required')
@@ -24,7 +26,7 @@ router.post('/leads', [
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { name, email, phone, companyId, source, apiKey, budget, propertyType, location, notes } = req.body;
+    const { name, email, phone, propertyId, companyId, source, apiKey, propertyType, location, notes, ...additionalFields } = req.body;
     console.log("apiKey", apiKey);
     console.log("process.env.WEBHOOK_API_KEY", process.env.WEBHOOK_API_KEY);
     // Validate API key (shared across all companies)
@@ -42,40 +44,98 @@ router.post('/leads', [
     // Check subscription limits
     const subscription = await Subscription.findOne({ companyId });
     const leadCount = await Lead.countDocuments({ companyId });
-    
+
+    console.log('🔍 Webhook - Company ID:', companyId);
+    console.log('🔍 Webhook - Lead count:', leadCount);
+    console.log('🔍 Webhook - Subscription found:', !!subscription);
+    if (subscription) {
+      console.log('🔍 Webhook - Subscription plan:', subscription.plan);
+      console.log('🔍 Webhook - Max leads:', subscription.features.maxLeads);
+      console.log('🔍 Webhook - Features:', subscription.features);
+    }
+
+    console.log('🔍 Webhook - Limit check:', {
+      hasSubscription: !!subscription,
+      maxLeadsNotUnlimited: subscription?.features?.maxLeads !== -1,
+      leadCount: leadCount,
+      maxLeads: subscription?.features?.maxLeads,
+      shouldBlock: subscription && subscription.features.maxLeads !== -1 && leadCount >= subscription.features.maxLeads
+    });
+
     if (subscription && subscription.features.maxLeads !== -1 && leadCount >= subscription.features.maxLeads) {
-      return res.status(403).json({ 
-        message: 'Lead limit reached. Please upgrade your plan to add more leads.' 
+      console.log('❌ Webhook - Lead limit reached!', {
+        currentLeads: leadCount,
+        maxLeads: subscription.features.maxLeads,
+        plan: subscription.plan
+      });
+      return res.status(403).json({
+        message: 'Lead limit reached. Please upgrade your plan to add more leads.'
       });
     }
 
-    // Create lead
+    // Find any admin user for createdBy field (required by Lead model)
+    const adminUser = await User.findOne({
+      companyId,
+      role: 'admin'
+    }).select('_id');
+
+    // Process custom fields from additional data
+    const customFields = {};
+    Object.entries(additionalFields).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        customFields[key] = {
+          label: key.charAt(0).toUpperCase() + key.slice(1).replace(/([A-Z])/g, ' $1'),
+          value: value,
+          type: typeof value === 'number' ? 'number' :
+            typeof value === 'boolean' ? 'boolean' :
+              value instanceof Date ? 'date' : 'text'
+        };
+      }
+    });
+
+    // Create lead (unassigned by default)
     const leadData = {
       companyId,
       name,
       email,
       phone,
-      budget: budget ? parseFloat(budget) : undefined,
+      propertyId: propertyId || undefined,
       propertyType: propertyType || 'apartment',
       status: 'new',
       source,
       location,
       notes,
+      customFields,
+      assignedTo: null, // Unassigned by default
+      createdBy: adminUser?._id, // Use admin user for createdBy (required field)
       createdAt: new Date()
     };
 
     const lead = new Lead(leadData);
     await lead.save();
 
-    // Send notification email
+    // Send notification email (only if admin user exists)
     try {
-      const populatedLead = await Lead.findById(lead._id)
-        .populate('assignedTo', 'name email');
-      
-      await notificationService.sendNewLeadNotification(populatedLead, company);
-      console.log('✅ Webhook lead notification sent successfully');
+      console.log('🔔 Webhook: Creating lead notification for:', lead.name);
+      console.log('👤 Webhook: Lead is unassigned');
+
+      if (adminUser) {
+        console.log('👤 Webhook: Sending notification to admin:', adminUser.name);
+
+        // Create a lead object with admin as the target for notification
+        const leadForNotification = {
+          ...lead.toObject(),
+          assignedTo: adminUser._id,
+          createdBy: adminUser._id
+        };
+
+        await notificationService.createLeadNotification(leadForNotification, 'webhook');
+        console.log('✅ Webhook lead notification sent successfully to admin');
+      } else {
+        console.log('⚠️ No admin user found, skipping notification');
+      }
     } catch (notificationError) {
-      console.error('Failed to send webhook lead notification:', notificationError);
+      console.error('❌ Failed to send webhook lead notification:', notificationError);
       // Don't fail the lead creation if notification fails
     }
 
@@ -118,14 +178,20 @@ router.post('/leads/bulk', [
       return res.status(404).json({ message: 'Company not found or inactive' });
     }
 
+    // Find a default user for bulk-created leads
+    const defaultUser = await User.findOne({ companyId }).select('_id');
+    if (!defaultUser) {
+      return res.status(400).json({ message: 'No users found in company' });
+    }
+
     // Check subscription limits
     const subscription = await Subscription.findOne({ companyId });
     const currentLeadCount = await Lead.countDocuments({ companyId });
-    
-    if (subscription && subscription.features.maxLeads !== -1 && 
-        (currentLeadCount + leads.length) > subscription.features.maxLeads) {
-      return res.status(403).json({ 
-        message: 'Bulk import would exceed lead limit. Please upgrade your plan.' 
+
+    if (subscription && subscription.features.maxLeads !== -1 &&
+      (currentLeadCount + leads.length) > subscription.features.maxLeads) {
+      return res.status(403).json({
+        message: 'Bulk import would exceed lead limit. Please upgrade your plan.'
       });
     }
 
@@ -135,7 +201,7 @@ router.post('/leads/bulk', [
 
     for (let i = 0; i < leads.length; i++) {
       const leadData = leads[i];
-      
+
       try {
         // Validate required fields
         if (!leadData.name || !leadData.email) {
@@ -144,11 +210,11 @@ router.post('/leads/bulk', [
         }
 
         // Check for duplicate email
-        const existingLead = await Lead.findOne({ 
-          email: leadData.email, 
-          companyId 
+        const existingLead = await Lead.findOne({
+          email: leadData.email,
+          companyId
         });
-        
+
         if (existingLead) {
           importErrors.push(`Lead ${i + 1}: Email already exists`);
           continue;
@@ -158,8 +224,9 @@ router.post('/leads/bulk', [
           companyId,
           name: leadData.name,
           email: leadData.email,
+          createdBy: defaultUser._id,
+          assignedTo: defaultUser._id,
           phone: leadData.phone,
-          budget: leadData.budget ? parseFloat(leadData.budget) : undefined,
           propertyType: leadData.propertyType || 'apartment',
           status: 'new',
           source: leadData.source || 'bulk_import',
@@ -174,9 +241,10 @@ router.post('/leads/bulk', [
         // Send notification email for each lead
         try {
           const populatedLead = await Lead.findById(newLead._id)
-            .populate('assignedTo', 'name email');
-          
-          await notificationService.sendNewLeadNotification(populatedLead, company);
+            .populate('assignedTo', 'name email')
+            .populate('createdBy', 'name email');
+
+          await notificationService.createLeadNotification(populatedLead, 'webhook');
           console.log(`✅ Bulk import lead notification sent for lead ${i + 1}`);
         } catch (notificationError) {
           console.error(`Failed to send bulk import lead notification for lead ${i + 1}:`, notificationError);
@@ -269,24 +337,32 @@ router.post('/leads/dynamic', [
     // Check subscription limits
     const subscription = await Subscription.findOne({ companyId });
     const leadCount = await Lead.countDocuments({ companyId });
-    
+
     if (subscription && subscription.features.maxLeads !== -1 && leadCount >= subscription.features.maxLeads) {
-      return res.status(403).json({ 
-        message: 'Lead limit reached. Please upgrade your plan to add more leads.' 
+      return res.status(403).json({
+        message: 'Lead limit reached. Please upgrade your plan to add more leads.'
       });
+    }
+
+    // Find a default user for form-created leads
+    const defaultUser = await User.findOne({ companyId }).select('_id');
+    if (!defaultUser) {
+      return res.status(400).json({ message: 'No users found in company' });
     }
 
     // Map form data to lead fields
     const leadData = {
       companyId,
       source: 'dynamic_form',
+      createdBy: defaultUser._id,
+      assignedTo: defaultUser._id,
       customFields: {}
     };
 
     // Map standard fields
     template.fields.forEach(field => {
       const value = formData[field.name];
-      
+
       if (value) {
         switch (field.mapping) {
           case 'name':
@@ -297,9 +373,6 @@ router.post('/leads/dynamic', [
             break;
           case 'phone':
             leadData.phone = value;
-            break;
-          case 'budget':
-            leadData.budget = parseFloat(value);
             break;
           case 'propertyType':
             leadData.propertyType = value;
@@ -333,9 +406,10 @@ router.post('/leads/dynamic', [
     // Send notification email
     try {
       const populatedLead = await Lead.findById(lead._id)
-        .populate('assignedTo', 'name email');
-      
-      await notificationService.sendNewLeadNotification(populatedLead, company);
+        .populate('assignedTo', 'name email')
+        .populate('createdBy', 'name email');
+
+      await notificationService.createLeadNotification(populatedLead, 'webhook');
       console.log('✅ Dynamic form lead notification sent successfully');
     } catch (notificationError) {
       console.error('Failed to send dynamic form lead notification:', notificationError);

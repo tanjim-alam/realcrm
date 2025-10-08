@@ -12,20 +12,181 @@ const router = express.Router();
 // Apply auth middleware to all routes
 router.use(authMiddleware);
 
+// @route   POST /api/leads/test-notification
+// @desc    Test notification endpoint
+// @access  Private
+router.post('/test-notification', async (req, res) => {
+  try {
+    const { name, email, platform = 'website' } = req.body;
+
+    // Create a test lead
+    const testLead = {
+      _id: new Date().getTime().toString(),
+      name: name || 'Test Lead',
+      email: email || 'test@example.com',
+      companyId: req.user.companyId,
+      assignedTo: req.user.id,
+      createdBy: req.user.id,
+      platform: platform,
+      status: 'new',
+      priority: 'warm'
+    };
+
+    // Send real-time notification
+    try {
+      await notificationService.createLeadNotification(testLead, platform);
+      res.json({
+        message: 'Test notification sent successfully',
+        lead: testLead
+      });
+    } catch (notificationError) {
+      console.error('Failed to send test notification:', notificationError);
+      res.status(500).json({
+        message: 'Lead created but notification failed',
+        error: notificationError.message
+      });
+    }
+  } catch (error) {
+    console.error('Test notification error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   POST /api/leads/test-assignment-notification
+// @desc    Test lead assignment notification endpoint
+// @access  Private
+router.post('/test-assignment-notification', async (req, res) => {
+  try {
+    console.log('🧪 ===== TESTING LEAD ASSIGNMENT NOTIFICATION =====');
+
+    // Create a test lead
+    const testLead = {
+      _id: new Date().getTime().toString(),
+      name: 'Test Assignment Lead',
+      email: 'test-assignment@example.com',
+      phone: '+1234567890',
+      companyId: req.user.companyId,
+      status: 'new',
+      priority: 'warm',
+      source: 'test'
+    };
+
+    // Create a test assigned user (current user)
+    const assignedTo = {
+      _id: req.user.id,
+      name: req.user.name,
+      email: req.user.email
+    };
+
+    // Create a test assigned by user (current user as admin)
+    const assignedBy = {
+      _id: req.user.id,
+      name: req.user.name,
+      email: req.user.email
+    };
+
+    console.log('🧪 Test data:', {
+      lead: testLead,
+      assignedTo: assignedTo,
+      assignedBy: assignedBy
+    });
+
+    // Send test assignment notification
+    const result = await notificationService.createLeadAssignmentNotification(testLead, assignedTo, assignedBy);
+
+    console.log('🧪 Test result:', result);
+    console.log('🧪 ===== TEST COMPLETED =====');
+
+    res.json({
+      message: 'Test lead assignment notification sent successfully',
+      result: result
+    });
+  } catch (error) {
+    console.error('❌ Test assignment notification error:', error);
+    console.error('❌ Error stack:', error.stack);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 // @route   GET /api/leads
-// @desc    Get all leads for the company
+// @desc    Get all leads for the company (admin sees all, agents see only assigned)
 // @access  Private
 router.get('/', async (req, res) => {
   try {
-    const { status, assignedTo, page = 1, limit = 10 } = req.query;
-    
+    const { status, assignedTo, propertyId, dateFilter, search, page = 1, limit = 100 } = req.query;
+
     // Build filter object
     const filter = { companyId: req.user.companyId };
+
+    // If user is agent, only show their assigned leads
+    if (req.user.role === 'agent') {
+      filter.assignedTo = req.user.id;
+    }
+
     if (status) filter.status = status;
-    if (assignedTo) filter.assignedTo = assignedTo;
+    if (assignedTo && req.user.role === 'admin') filter.assignedTo = assignedTo;
+    if (propertyId) filter.propertyId = propertyId;
+
+    // Search filter
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } },
+        { source: { $regex: search, $options: 'i' } },
+        { notes: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Date filtering
+    if (dateFilter) {
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+      switch (dateFilter) {
+        case 'today':
+          filter.createdAt = { $gte: startOfDay, $lt: endOfDay };
+          break;
+        case 'yesterday':
+          const yesterdayStart = new Date(startOfDay);
+          yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+          const yesterdayEnd = new Date(endOfDay);
+          yesterdayEnd.setDate(yesterdayEnd.getDate() - 1);
+          filter.createdAt = { $gte: yesterdayStart, $lt: yesterdayEnd };
+          break;
+        case 'this_week':
+          const startOfWeek = new Date(startOfDay);
+          startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
+          filter.createdAt = { $gte: startOfWeek };
+          break;
+        case 'last_week':
+          const lastWeekStart = new Date(startOfDay);
+          lastWeekStart.setDate(startOfDay.getDate() - startOfDay.getDay() - 7);
+          const lastWeekEnd = new Date(startOfDay);
+          lastWeekEnd.setDate(startOfDay.getDate() - startOfDay.getDay());
+          filter.createdAt = { $gte: lastWeekStart, $lt: lastWeekEnd };
+          break;
+        case 'this_month':
+          const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+          filter.createdAt = { $gte: startOfMonth };
+          break;
+        case 'last_month':
+          const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+          const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+          filter.createdAt = { $gte: lastMonthStart, $lt: lastMonthEnd };
+          break;
+        case 'this_year':
+          const startOfYear = new Date(now.getFullYear(), 0, 1);
+          filter.createdAt = { $gte: startOfYear };
+          break;
+      }
+    }
 
     const leads = await Lead.find(filter)
       .populate('assignedTo', 'name email')
+      .populate('createdBy', 'name email')
+      .populate('propertyId', 'title location price propertyType')
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
@@ -40,6 +201,134 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Get leads error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/leads/export
+// @desc    Export leads to CSV
+// @access  Private
+router.get('/export', async (req, res) => {
+  try {
+    const { status, assignedTo, propertyId, dateFilter, search, format = 'csv' } = req.query;
+
+    // Build filter object (same as GET /leads)
+    const filter = { companyId: req.user.companyId };
+
+    // If user is agent, only show their assigned leads
+    if (req.user.role === 'agent') {
+      filter.assignedTo = req.user.id;
+    }
+
+    if (status) filter.status = status;
+    if (assignedTo && req.user.role === 'admin') filter.assignedTo = assignedTo;
+    if (propertyId) filter.propertyId = propertyId;
+
+    // Search filter
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { phone: { $regex: search, $options: 'i' } },
+        { source: { $regex: search, $options: 'i' } },
+        { notes: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Date filtering (same logic as GET /leads)
+    if (dateFilter) {
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+
+      switch (dateFilter) {
+        case 'today':
+          filter.createdAt = { $gte: startOfDay, $lt: endOfDay };
+          break;
+        case 'yesterday':
+          const yesterdayStart = new Date(startOfDay);
+          yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+          const yesterdayEnd = new Date(endOfDay);
+          yesterdayEnd.setDate(yesterdayEnd.getDate() - 1);
+          filter.createdAt = { $gte: yesterdayStart, $lt: yesterdayEnd };
+          break;
+        case 'this_week':
+          const startOfWeek = new Date(startOfDay);
+          startOfWeek.setDate(startOfDay.getDate() - startOfDay.getDay());
+          filter.createdAt = { $gte: startOfWeek };
+          break;
+        case 'last_week':
+          const lastWeekStart = new Date(startOfDay);
+          lastWeekStart.setDate(startOfDay.getDate() - startOfDay.getDay() - 7);
+          const lastWeekEnd = new Date(startOfDay);
+          lastWeekEnd.setDate(startOfDay.getDate() - startOfDay.getDay());
+          filter.createdAt = { $gte: lastWeekStart, $lt: lastWeekEnd };
+          break;
+        case 'this_month':
+          const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+          filter.createdAt = { $gte: startOfMonth };
+          break;
+        case 'last_month':
+          const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+          const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 1);
+          filter.createdAt = { $gte: lastMonthStart, $lt: lastMonthEnd };
+          break;
+        case 'this_year':
+          const startOfYear = new Date(now.getFullYear(), 0, 1);
+          filter.createdAt = { $gte: startOfYear };
+          break;
+      }
+    }
+
+    const leads = await Lead.find(filter)
+      .populate('assignedTo', 'name email')
+      .populate('createdBy', 'name email')
+      .populate('propertyId', 'title location price propertyType')
+      .sort({ createdAt: -1 });
+
+    if (format === 'csv') {
+      // Generate CSV with enhanced information
+      const csvHeader = 'Name,Email,Phone,Property,Property Location,Property Price,Property Type,Status,Priority,Source,Assigned To,Assigned To Email,Created By,Created Date,Last Updated,Notes,Timeline,Requirements\n';
+      const csvRows = leads.map(lead => {
+        const propertyName = lead.propertyId ? lead.propertyId.title : 'No Property';
+        const propertyLocation = lead.propertyId ? lead.propertyId.location?.address || 'N/A' : 'N/A';
+        const propertyPrice = lead.propertyId ?
+          `${lead.propertyId.price?.value || 'N/A'} ${lead.propertyId.price?.unit || ''}` : 'N/A';
+        const propertyType = lead.propertyId ? lead.propertyId.propertyType : 'N/A';
+        const assignedToName = lead.assignedTo ? lead.assignedTo.name : 'Unassigned';
+        const assignedToEmail = lead.assignedTo ? lead.assignedTo.email : 'N/A';
+        const createdByName = lead.createdBy ? lead.createdBy.name : 'N/A';
+        const createdDate = new Date(lead.createdAt).toLocaleDateString();
+        const lastUpdated = new Date(lead.updatedAt).toLocaleDateString();
+        const notes = (lead.notes || '').replace(/,/g, ';').replace(/\n/g, ' ');
+        const timeline = lead.timeline || 'N/A';
+        const requirements = lead.requirements || 'N/A';
+
+        return `"${lead.name}","${lead.email}","${lead.phone || ''}","${propertyName}","${propertyLocation}","${propertyPrice}","${propertyType}","${lead.status}","${lead.priority}","${lead.source}","${assignedToName}","${assignedToEmail}","${createdByName}","${createdDate}","${lastUpdated}","${notes}","${timeline}","${requirements}"`;
+      }).join('\n');
+
+      const csvContent = csvHeader + csvRows;
+
+      // Generate dynamic filename based on filters
+      const now = new Date();
+      const dateStr = now.toISOString().split('T')[0];
+      const timeStr = now.toTimeString().split(' ')[0].replace(/:/g, '-');
+
+      let filename = `leads_${dateStr}_${timeStr}`;
+      if (status) filename += `_status-${status}`;
+      if (propertyId) filename += `_property-${propertyId}`;
+      if (dateFilter) filename += `_${dateFilter}`;
+      if (search) filename += `_search-${search.substring(0, 10)}`;
+      filename += '.csv';
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(csvContent);
+    } else {
+      res.json({ leads });
+    }
+  } catch (error) {
+    console.error('Export leads error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -72,7 +361,7 @@ router.post('/', [
   body('name').notEmpty().withMessage('Name is required'),
   body('email').isEmail().withMessage('Please provide a valid email'),
   body('phone').optional().isString().withMessage('Phone must be a string'),
-  body('budget').optional().isNumeric().withMessage('Budget must be a number'),
+  body('propertyId').optional().isMongoId().withMessage('Property ID must be a valid MongoDB ObjectId'),
   body('propertyType').optional().isIn(['apartment', 'house', 'condo', 'townhouse', 'commercial', 'land', 'other']),
   body('status').optional().isIn(['new', 'contacted', 'visit', 'offer', 'closed', 'lost'])
 ], async (req, res) => {
@@ -85,33 +374,55 @@ router.post('/', [
     // Check subscription limits
     const subscription = await Subscription.findOne({ companyId: req.user.companyId });
     const leadCount = await Lead.countDocuments({ companyId: req.user.companyId });
-    
+    console.log('🔍 Lead count:', leadCount);
+    console.log('🔍 Subscription:', subscription);
     if (subscription && subscription.features.maxLeads !== -1 && leadCount >= subscription.features.maxLeads) {
-      return res.status(403).json({ 
-        message: 'Lead limit reached. Please upgrade your plan to add more leads.' 
+      return res.status(403).json({
+        message: 'Lead limit reached. Please upgrade your plan to add more leads.'
       });
     }
 
+    // Handle empty string for propertyId - convert to null
     const leadData = {
       ...req.body,
-      companyId: req.user.companyId
+      companyId: req.user.companyId,
+      createdBy: req.user.id
     };
+
+    if (leadData.propertyId === '') {
+      leadData.propertyId = null;
+    }
+
+    // Detect platform from lead data
+    const platform = notificationService.detectPlatform(leadData);
+    leadData.platform = platform;
 
     const lead = new Lead(leadData);
     await lead.save();
 
     const populatedLead = await Lead.findById(lead._id)
-      .populate('assignedTo', 'name email');
+      .populate('assignedTo', 'name email')
+      .populate('createdBy', 'name email');
 
-    // Send notification email
+    // Send real-time notification
     try {
-      const company = await Company.findById(req.user.companyId);
-      if (company) {
-        await notificationService.sendNewLeadNotification(populatedLead, company);
-      }
+      console.log('🔔 Creating lead notification for:', populatedLead.name);
+      console.log('👤 Assigned to:', populatedLead.assignedTo?._id);
+      console.log('👤 Created by:', populatedLead.createdBy?._id);
+      await notificationService.createLeadNotification(populatedLead, platform);
+      console.log('✅ Lead notification created successfully');
     } catch (notificationError) {
-      console.error('Failed to send lead notification:', notificationError);
+      console.error('❌ Failed to send lead notification:', notificationError);
       // Don't fail the lead creation if notification fails
+    }
+
+    // Send email notification (if email service is available)
+    try {
+      // This would be handled by your existing email service
+      console.log('Lead created successfully:', populatedLead.name);
+    } catch (emailError) {
+      console.error('Failed to send email notification:', emailError);
+      // Don't fail the lead creation if email fails
     }
 
     res.status(201).json(populatedLead);
@@ -128,7 +439,6 @@ router.put('/:id', [
   body('name').optional().notEmpty().withMessage('Name cannot be empty'),
   body('email').optional().isEmail().withMessage('Please provide a valid email'),
   body('phone').optional().isString().withMessage('Phone must be a string'),
-  body('budget').optional().isNumeric().withMessage('Budget must be a number'),
   body('propertyType').optional().isIn(['apartment', 'house', 'condo', 'townhouse', 'commercial', 'land', 'other']),
   body('status').optional().isIn(['new', 'contacted', 'visit', 'offer', 'closed', 'lost'])
 ], async (req, res) => {
@@ -140,10 +450,16 @@ router.put('/:id', [
 
     // Get the old lead data for comparison
     const oldLead = await Lead.findOne({ _id: req.params.id, companyId: req.user.companyId });
-    
+
+    // Handle empty string for propertyId - convert to null
+    const updateData = { ...req.body };
+    if (updateData.propertyId === '') {
+      updateData.propertyId = null;
+    }
+
     const lead = await Lead.findOneAndUpdate(
       { _id: req.params.id, companyId: req.user.companyId },
-      req.body,
+      updateData,
       { new: true, runValidators: true }
     ).populate('assignedTo', 'name email');
 
@@ -156,7 +472,8 @@ router.put('/:id', [
       try {
         const company = await Company.findById(req.user.companyId);
         if (company) {
-          await notificationService.sendLeadStatusChangeNotification(lead, oldLead.status, lead.status, company);
+          // Status change notification - can be implemented later
+          console.log('Lead status changed from', oldLead.status, 'to', lead.status);
         }
       } catch (notificationError) {
         console.error('Failed to send status change notification:', notificationError);
@@ -193,12 +510,17 @@ router.delete('/:id', async (req, res) => {
 });
 
 // @route   PUT /api/leads/:id/assign
-// @desc    Assign lead to agent (Admin and Agent can assign)
+// @desc    Assign lead to agent (Admin only)
 // @access  Private
 router.put('/:id/assign', [
   body('assignedTo').optional().isMongoId().withMessage('Valid agent ID is required')
 ], async (req, res) => {
   try {
+    // Check if user is admin
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ message: 'Only admin users can assign leads' });
+    }
+
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
@@ -211,7 +533,7 @@ router.put('/:id/assign', [
       const agent = await User.findOne({
         _id: assignedTo,
         companyId: req.user.companyId,
-        role: { $in: ['admin', 'agent'] }
+        role: 'agent' // Only agents can be assigned leads
       });
 
       if (!agent) {
@@ -226,7 +548,7 @@ router.put('/:id/assign', [
       });
 
       if (currentLeadCount >= agent.leadCapacity) {
-        return res.status(400).json({ 
+        return res.status(400).json({
           message: `Agent ${agent.name} has reached their lead capacity (${agent.leadCapacity} leads). Please assign to another agent or increase their capacity.`,
           agentCapacity: agent.leadCapacity,
           currentLeads: currentLeadCount
@@ -247,12 +569,11 @@ router.put('/:id/assign', [
     // Send notification for assignment
     if (assignedTo && lead.assignedTo) {
       try {
-        const company = await Company.findById(req.user.companyId);
-        if (company) {
-          await notificationService.sendLeadAssignmentNotification(lead, lead.assignedTo, company);
-        }
+        console.log('🔔 Sending lead assignment notification...');
+        await notificationService.createLeadAssignmentNotification(lead, lead.assignedTo, req.user);
+        console.log('✅ Lead assignment notification sent successfully');
       } catch (notificationError) {
-        console.error('Failed to send assignment notification:', notificationError);
+        console.error('❌ Failed to send assignment notification:', notificationError);
         // Don't fail the assignment if notification fails
       }
     }
@@ -281,7 +602,7 @@ router.put('/:id/reminder', [
 
     const lead = await Lead.findOneAndUpdate(
       { _id: req.params.id, companyId: req.user.companyId },
-      { 
+      {
         reminder: {
           date: new Date(reminder.date),
           message: reminder.message || '',
@@ -342,10 +663,10 @@ router.delete('/:id/reminder', async (req, res) => {
   try {
     const lead = await Lead.findOneAndUpdate(
       { _id: req.params.id, companyId: req.user.companyId },
-      { 
-        $unset: { 
-          reminder: 1 
-        } 
+      {
+        $unset: {
+          reminder: 1
+        }
       },
       { new: true, runValidators: true }
     ).populate('assignedTo', 'name email');
@@ -375,8 +696,8 @@ router.get('/reminders/upcoming', async (req, res) => {
       'reminder.date': { $lte: futureDate, $gte: new Date() },
       'reminder.isCompleted': false
     })
-    .populate('assignedTo', 'name email')
-    .sort({ 'reminder.date': 1 });
+      .populate('assignedTo', 'name email')
+      .sort({ 'reminder.date': 1 });
 
     res.json(leads);
   } catch (error) {
@@ -459,7 +780,6 @@ router.post('/:id/auto-assign', async (req, res) => {
       leadName: lead.name,
       leadData: {
         propertyType: lead.propertyType,
-        budget: lead.budget,
         priority: lead.priority,
         timeline: lead.timeline,
         location: lead.location
@@ -506,12 +826,6 @@ router.post('/:id/auto-assign', async (req, res) => {
           if (lead.propertyType && agent.specializations.propertyTypes.includes(lead.propertyType)) {
             score += 30;
             reasons.push('Property type match');
-          } else if (agent.specializations.propertyTypes.includes('luxury') && lead.budget && lead.budget > 5000000) {
-            score += 25;
-            reasons.push('Luxury property match');
-          } else if (agent.specializations.propertyTypes.includes('first_time_buyer') && lead.budget && lead.budget < 2000000) {
-            score += 25;
-            reasons.push('First-time buyer match');
           }
         }
 
@@ -525,14 +839,6 @@ router.post('/:id/auto-assign', async (req, res) => {
           }
         }
 
-        // Budget range match
-        if (lead.budget && agent.specializations && agent.specializations.budgetRange) {
-          if (lead.budget >= agent.specializations.budgetRange.min && 
-              lead.budget <= agent.specializations.budgetRange.max) {
-            score += 20;
-            reasons.push('Budget range match');
-          }
-        }
 
         // Experience level match with priority
         if (lead.priority && agent.specializations && agent.specializations.experience) {
@@ -622,8 +928,14 @@ router.post('/:id/auto-assign', async (req, res) => {
 // @access  Private
 router.get('/stats/summary', async (req, res) => {
   try {
+    // Build match criteria based on user role
+    const matchCriteria = { companyId: req.user.companyId };
+    if (req.user.role === 'agent') {
+      matchCriteria.assignedTo = req.user.id;
+    }
+
     const stats = await Lead.aggregate([
-      { $match: { companyId: req.user.companyId } },
+      { $match: matchCriteria },
       {
         $group: {
           _id: '$status',
@@ -632,8 +944,8 @@ router.get('/stats/summary', async (req, res) => {
       }
     ]);
 
-    const totalLeads = await Lead.countDocuments({ companyId: req.user.companyId });
-    const recentLeads = await Lead.find({ companyId: req.user.companyId })
+    const totalLeads = await Lead.countDocuments(matchCriteria);
+    const recentLeads = await Lead.find(matchCriteria)
       .sort({ createdAt: -1 })
       .limit(5)
       .populate('assignedTo', 'name');
@@ -654,13 +966,18 @@ router.get('/stats/summary', async (req, res) => {
 // @access  Private
 router.get('/stats/platforms', async (req, res) => {
   try {
+    // Build match criteria based on user role
+    const matchCriteria = { companyId: req.user.companyId };
+    if (req.user.role === 'agent') {
+      matchCriteria.assignedTo = req.user.id;
+    }
+
     const platformStats = await Lead.aggregate([
-      { $match: { companyId: req.user.companyId } },
+      { $match: matchCriteria },
       {
         $group: {
           _id: { $ifNull: ['$source', 'Not specified'] },
-          count: { $sum: 1 },
-          totalValue: { $sum: { $ifNull: ['$budget', 0] } }
+          count: { $sum: 1 }
         }
       },
       { $sort: { count: -1 } }
@@ -700,8 +1017,215 @@ const formatPlatformName = (platform) => {
     'other': 'Other',
     'Not specified': 'Not Specified'
   };
-  
+
   return platformMap[platform] || platform.charAt(0).toUpperCase() + platform.slice(1);
 };
+
+// Import property matching service
+const propertyMatchingService = require('../services/propertyMatchingService');
+
+// @route   GET /api/leads/:id/property-recommendations
+// @desc    Get property recommendations for a lead
+// @access  Private
+router.get('/:id/property-recommendations', authMiddleware, async (req, res) => {
+  try {
+    const leadId = req.params.id;
+    const limit = parseInt(req.query.limit) || 5;
+
+    // Verify lead belongs to user's company
+    const lead = await Lead.findOne({
+      _id: leadId,
+      companyId: req.user.companyId
+    });
+
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    const recommendations = await propertyMatchingService.getPropertyRecommendations(leadId, { limit });
+
+    res.json({
+      success: true,
+      data: recommendations,
+      count: recommendations.length
+    });
+
+  } catch (error) {
+    console.error('Get property recommendations error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   POST /api/leads/:id/property-interest
+// @desc    Track property interest for a lead
+// @access  Private
+router.post('/:id/property-interest', [
+  body('propertyId').isMongoId().withMessage('Valid property ID required'),
+  body('interestLevel').optional().isIn(['high', 'medium', 'low']).withMessage('Invalid interest level'),
+  body('status').optional().isIn(['interested', 'viewing', 'negotiating', 'offered', 'rejected', 'purchased']).withMessage('Invalid status'),
+  body('notes').optional().isString().withMessage('Notes must be a string')
+], authMiddleware, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const leadId = req.params.id;
+    const { propertyId, interestLevel, status, notes } = req.body;
+
+    // Verify lead belongs to user's company
+    const lead = await Lead.findOne({
+      _id: leadId,
+      companyId: req.user.companyId
+    });
+
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    // Verify property belongs to user's company
+    const Property = require('../models/Property');
+    const property = await Property.findOne({
+      _id: propertyId,
+      companyId: req.user.companyId
+    });
+
+    if (!property) {
+      return res.status(404).json({ message: 'Property not found' });
+    }
+
+    const updatedLead = await propertyMatchingService.trackPropertyInterest(leadId, propertyId, {
+      interestLevel,
+      status,
+      notes
+    });
+
+    res.json({
+      success: true,
+      message: 'Property interest tracked successfully',
+      data: updatedLead
+    });
+
+  } catch (error) {
+    console.error('Track property interest error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   GET /api/leads/:id/property-interests
+// @desc    Get all property interests for a lead
+// @access  Private
+router.get('/:id/property-interests', authMiddleware, async (req, res) => {
+  try {
+    const leadId = req.params.id;
+
+    const lead = await Lead.findOne({
+      _id: leadId,
+      companyId: req.user.companyId
+    }).populate('propertyInterests.propertyId', 'title price location propertyType bedrooms bathrooms area images status');
+
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    res.json({
+      success: true,
+      data: lead.propertyInterests || []
+    });
+
+  } catch (error) {
+    console.error('Get property interests error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   PUT /api/leads/:id/property-interests/:interestId
+// @desc    Update property interest for a lead
+// @access  Private
+router.put('/:id/property-interests/:interestId', [
+  body('interestLevel').optional().isIn(['high', 'medium', 'low']).withMessage('Invalid interest level'),
+  body('status').optional().isIn(['interested', 'viewing', 'negotiating', 'offered', 'rejected', 'purchased']).withMessage('Invalid status'),
+  body('notes').optional().isString().withMessage('Notes must be a string')
+], authMiddleware, async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const leadId = req.params.id;
+    const interestId = req.params.interestId;
+    const { interestLevel, status, notes } = req.body;
+
+    const lead = await Lead.findOne({
+      _id: leadId,
+      companyId: req.user.companyId
+    });
+
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    const interest = lead.propertyInterests.id(interestId);
+    if (!interest) {
+      return res.status(404).json({ message: 'Property interest not found' });
+    }
+
+    // Update interest
+    if (interestLevel) interest.interestLevel = interestLevel;
+    if (status) interest.status = status;
+    if (notes !== undefined) interest.notes = notes;
+    interest.lastContacted = new Date();
+
+    await lead.save();
+
+    res.json({
+      success: true,
+      message: 'Property interest updated successfully',
+      data: interest
+    });
+
+  } catch (error) {
+    console.error('Update property interest error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   DELETE /api/leads/:id/property-interests/:interestId
+// @desc    Remove property interest for a lead
+// @access  Private
+router.delete('/:id/property-interests/:interestId', authMiddleware, async (req, res) => {
+  try {
+    const leadId = req.params.id;
+    const interestId = req.params.interestId;
+
+    const lead = await Lead.findOne({
+      _id: leadId,
+      companyId: req.user.companyId
+    });
+
+    if (!lead) {
+      return res.status(404).json({ message: 'Lead not found' });
+    }
+
+    const interest = lead.propertyInterests.id(interestId);
+    if (!interest) {
+      return res.status(404).json({ message: 'Property interest not found' });
+    }
+
+    interest.remove();
+    await lead.save();
+
+    res.json({
+      success: true,
+      message: 'Property interest removed successfully'
+    });
+
+  } catch (error) {
+    console.error('Remove property interest error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
 
 module.exports = router;

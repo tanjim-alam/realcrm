@@ -13,7 +13,15 @@ import {
   Globe,
   BarChart3,
   PieChart,
-  CheckSquare
+  CheckSquare,
+  ArrowUpRight,
+  ArrowDownRight,
+  Activity,
+  Target,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  RefreshCw
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -38,412 +46,373 @@ const Dashboard = () => {
     recentTasks: []
   });
   const [loading, setLoading] = useState(true);
+  const [lastUpdated, setLastUpdated] = useState(null);
+
+  const fetchDashboardData = async () => {
+    try {
+      setLoading(true);
+      const [leadsResponse, propertiesResponse, platformResponse, tasksResponse, adminResponse] = await Promise.all([
+        api.get('/leads/stats/summary'),
+        api.get('/properties/stats/summary'),
+        api.get('/leads/stats/platforms'),
+        api.get('/tasks/stats'),
+        user.role === 'admin' ? api.get('/admin/dashboard') : Promise.resolve({ data: null })
+      ]);
+
+      const leadsData = leadsResponse.data;
+      const propertiesData = propertiesResponse.data;
+      const platformData = platformResponse.data;
+      const tasksData = tasksResponse.data;
+      const adminData = adminResponse.data;
+
+      console.log('Dashboard API Responses:', {
+        leadsData,
+        propertiesData,
+        platformData,
+        tasksData,
+        adminData
+      });
+
+      console.log('Task Stats Debug:', {
+        rawTasksData: tasksData,
+        overview: tasksData?.overview,
+        taskStats: {
+          total: tasksData?.overview?.total || 0,
+          pending: tasksData?.overview?.pending || 0,
+          completed: tasksData?.overview?.completed || 0,
+          overdue: tasksData?.overview?.overdue || 0,
+          dueToday: tasksData?.overview?.dueToday || 0
+        }
+      });
+
+      setStats({
+        totalLeads: leadsData?.totalLeads || 0,
+        totalProperties: propertiesData?.totalProperties || 0,
+        totalUsers: adminData?.stats?.totalUsers || 0,
+        recentLeads: leadsData?.recentLeads || [],
+        recentProperties: propertiesData?.recentProperties || [],
+        leadsByStatus: leadsData?.statusCounts || [],
+        propertiesByStatus: propertiesData?.statusCounts || [],
+        leadsByPlatform: platformData || [],
+        taskStats: {
+          total: tasksData?.overview?.total || 0,
+          pending: tasksData?.overview?.pending || 0,
+          completed: tasksData?.overview?.completed || 0,
+          overdue: tasksData?.overview?.overdue || 0,
+          dueToday: tasksData?.overview?.dueToday || 0
+        },
+        recentTasks: [] // Recent tasks not available in stats endpoint
+      });
+      setLastUpdated(new Date());
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchDashboardData = async () => {
-      try {
-        const [leadsResponse, propertiesResponse, platformResponse, tasksResponse, adminResponse] = await Promise.all([
-          api.get('/leads/stats/summary'),
-          api.get('/properties/stats/summary'),
-          api.get('/leads/stats/platforms'),
-          api.get('/tasks/stats'),
-          user.role === 'admin' ? api.get('/admin/dashboard') : Promise.resolve({ data: null })
-        ]);
-
-        const leadsData = leadsResponse.data;
-        const propertiesData = propertiesResponse.data;
-        const platformData = platformResponse.data;
-        const tasksData = tasksResponse.data;
-        const adminData = adminResponse.data;
-
-        setStats({
-          totalLeads: leadsData.totalLeads,
-          totalProperties: propertiesData.totalProperties,
-          totalUsers: adminData?.stats?.totalUsers || 0,
-          recentLeads: leadsData.recentLeads || [],
-          recentProperties: propertiesData.recentProperties || [],
-          leadsByStatus: leadsData.statusCounts || [],
-          propertiesByStatus: propertiesData.statusCounts || [],
-          leadsByPlatform: platformData || [],
-          taskStats: tasksData?.overview || {
-            total: 0,
-            pending: 0,
-            completed: 0,
-            overdue: 0,
-            dueToday: 0
-          },
-          recentTasks: []
-        });
-      } catch (error) {
-        console.error('Error fetching dashboard data:', error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchDashboardData();
   }, [user.role]);
 
-  const getStatusColor = (status) => {
-    const colors = {
-      new: 'bg-blue-100 text-blue-800',
-      contacted: 'bg-yellow-100 text-yellow-800',
-      visit: 'bg-purple-100 text-purple-800',
-      offer: 'bg-orange-100 text-orange-800',
-      closed: 'bg-green-100 text-green-800',
-      lost: 'bg-red-100 text-red-800',
-      available: 'bg-green-100 text-green-800',
-      pending: 'bg-yellow-100 text-yellow-800',
-      sold: 'bg-gray-100 text-gray-800',
-      rented: 'bg-blue-100 text-blue-800'
+  const StatCard = ({ title, value, icon: Icon, change, changeType, color = 'blue' }) => {
+    const colorClasses = {
+      blue: 'from-blue-500 to-blue-600',
+      green: 'from-green-500 to-green-600',
+      purple: 'from-purple-500 to-purple-600',
+      orange: 'from-orange-500 to-orange-600',
+      indigo: 'from-indigo-500 to-indigo-600',
+      pink: 'from-pink-500 to-pink-600'
     };
-    return colors[status] || 'bg-gray-100 text-gray-800';
+
+    return (
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/20 hover:shadow-xl transition-all duration-300 group">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-600 mb-1">{title}</p>
+            <p className="text-3xl font-bold text-slate-900">{value}</p>
+            {change && (
+              <div className={`flex items-center mt-2 text-sm ${changeType === 'increase' ? 'text-green-600' : 'text-red-600'
+                }`}>
+                {changeType === 'increase' ? (
+                  <ArrowUpRight className="h-4 w-4 mr-1" />
+                ) : (
+                  <ArrowDownRight className="h-4 w-4 mr-1" />
+                )}
+                {change}
+              </div>
+            )}
+          </div>
+          <div className={`h-12 w-12 rounded-xl bg-gradient-to-r ${colorClasses[color]} flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform duration-300`}>
+            <Icon className="h-6 w-6 text-white" />
+          </div>
+        </div>
+      </div>
+    );
   };
+
+  const TaskCard = ({ title, count, icon: Icon, color, bgColor }) => (
+    <div className={`${bgColor} rounded-xl p-4 border border-white/20`}>
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-slate-600">{title}</p>
+          <p className="text-2xl font-bold text-slate-900">{count}</p>
+        </div>
+        <div className={`h-10 w-10 rounded-lg ${color} flex items-center justify-center`}>
+          <Icon className="h-5 w-5 text-white" />
+        </div>
+      </div>
+    </div>
+  );
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary-600"></div>
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="mt-4 text-slate-600">Loading dashboard...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Welcome back, {user.name}! Here's what's happening with your real estate business.
-        </p>
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/20">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+              Welcome back, {user?.name || 'User'}!
+            </h1>
+            <p className="text-slate-600 mt-1">
+              Here's what's happening with your real estate business today.
+              {lastUpdated && (
+                <span className="ml-2 text-sm text-blue-600">
+                  • Last updated: {lastUpdated.toLocaleTimeString()}
+                </span>
+              )}
+            </p>
+          </div>
+          <div className="flex items-center space-x-4">
+            <button
+              onClick={fetchDashboardData}
+              disabled={loading}
+              className="flex items-center px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl hover:from-blue-600 hover:to-indigo-600 transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+              {loading ? 'Refreshing...' : 'Refresh Data'}
+            </button>
+            <div className="text-right">
+              <p className="text-sm text-slate-500">Today</p>
+              <p className="text-lg font-semibold text-slate-900">{format(new Date(), 'EEEE, MMMM do')}</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="card">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <Users className="h-8 w-8 text-blue-600" />
-            </div>
-            <div className="ml-5 w-0 flex-1">
-              <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Total Leads</dt>
-                <dd className="text-lg font-medium text-gray-900">{stats.totalLeads}</dd>
-              </dl>
-            </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <Building2 className="h-8 w-8 text-green-600" />
-            </div>
-            <div className="ml-5 w-0 flex-1">
-              <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Total Properties</dt>
-                <dd className="text-lg font-medium text-gray-900">{stats.totalProperties}</dd>
-              </dl>
-            </div>
-          </div>
-        </div>
-
-        {user.role === 'admin' && (
-          <div className="card">
-            <div className="flex items-center">
-              <div className="flex-shrink-0">
-                <UserPlus className="h-8 w-8 text-purple-600" />
-              </div>
-              <div className="ml-5 w-0 flex-1">
-                <dl>
-                  <dt className="text-sm font-medium text-gray-500 truncate">Team Members</dt>
-                  <dd className="text-lg font-medium text-gray-900">{stats.totalUsers}</dd>
-                </dl>
-              </div>
-            </div>
-          </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <StatCard
+          title="Total Leads"
+          value={stats.totalLeads}
+          icon={Users}
+          color="blue"
+        />
+        <StatCard
+          title="Properties"
+          value={stats.totalProperties}
+          icon={Building2}
+          color="green"
+        />
+        <StatCard
+          title="Active Tasks"
+          value={stats.taskStats.pending}
+          icon={CheckSquare}
+          color="purple"
+        />
+        {user?.role === 'admin' && (
+          <StatCard
+            title="Team Members"
+            value={stats.totalUsers}
+            icon={UserPlus}
+            color="orange"
+          />
         )}
+      </div>
 
-        <div className="card">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <TrendingUp className="h-8 w-8 text-orange-600" />
-            </div>
-            <div className="ml-5 w-0 flex-1">
-              <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Plan</dt>
-                <dd className="text-lg font-medium text-gray-900 capitalize">{company?.plan}</dd>
-              </dl>
-            </div>
+      {/* Task Overview */}
+      <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/20">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-slate-900">Task Overview</h2>
+          <div className="flex items-center text-sm text-slate-500">
+            <Activity className="h-4 w-4 mr-2" />
+            Real-time updates
           </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <TaskCard
+            title="Total Tasks"
+            count={stats.taskStats.total}
+            icon={Target}
+            color="bg-gradient-to-r from-slate-500 to-slate-600"
+            bgColor="bg-slate-50"
+          />
+          <TaskCard
+            title="Pending"
+            count={stats.taskStats.pending}
+            icon={Clock}
+            color="bg-gradient-to-r from-yellow-500 to-orange-500"
+            bgColor="bg-yellow-50"
+          />
+          <TaskCard
+            title="Completed"
+            count={stats.taskStats.completed}
+            icon={CheckCircle2}
+            color="bg-gradient-to-r from-green-500 to-emerald-500"
+            bgColor="bg-green-50"
+          />
+          <TaskCard
+            title="Overdue"
+            count={stats.taskStats.overdue}
+            icon={XCircle}
+            color="bg-gradient-to-r from-red-500 to-rose-500"
+            bgColor="bg-red-50"
+          />
+          <TaskCard
+            title="Due Today"
+            count={stats.taskStats.dueToday}
+            icon={AlertCircle}
+            color="bg-gradient-to-r from-blue-500 to-indigo-500"
+            bgColor="bg-blue-50"
+          />
         </div>
       </div>
 
-      {/* Task Stats Grid */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-5">
-        <div className="card">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <CheckSquare className="h-8 w-8 text-blue-600" />
-            </div>
-            <div className="ml-5 w-0 flex-1">
-              <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Total Tasks</dt>
-                <dd className="text-lg font-medium text-gray-900">{stats.taskStats.total}</dd>
-              </dl>
-            </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <AlertCircle className="h-8 w-8 text-yellow-600" />
-            </div>
-            <div className="ml-5 w-0 flex-1">
-              <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Pending</dt>
-                <dd className="text-lg font-medium text-gray-900">{stats.taskStats.pending}</dd>
-              </dl>
-            </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <CheckSquare className="h-8 w-8 text-green-600" />
-            </div>
-            <div className="ml-5 w-0 flex-1">
-              <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Completed</dt>
-                <dd className="text-lg font-medium text-gray-900">{stats.taskStats.completed}</dd>
-              </dl>
-            </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <AlertCircle className="h-8 w-8 text-red-600" />
-            </div>
-            <div className="ml-5 w-0 flex-1">
-              <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Overdue</dt>
-                <dd className="text-lg font-medium text-gray-900">{stats.taskStats.overdue}</dd>
-              </dl>
-            </div>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <Calendar className="h-8 w-8 text-purple-600" />
-            </div>
-            <div className="ml-5 w-0 flex-1">
-              <dl>
-                <dt className="text-sm font-medium text-gray-500 truncate">Due Today</dt>
-                <dd className="text-lg font-medium text-gray-900">{stats.taskStats.dueToday}</dd>
-              </dl>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Activity */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Recent Leads */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">Recent Leads</h3>
-            <Users className="h-5 w-5 text-gray-400" />
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/20">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-slate-900">Recent Leads</h2>
+            <button className="text-blue-600 hover:text-blue-700 text-sm font-medium">
+              View all
+            </button>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-4">
             {stats.recentLeads.length > 0 ? (
-              stats.recentLeads.map((lead) => (
-                <div key={lead._id} className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {lead.name}
-                    </p>
-                    <p className="text-sm text-gray-500 truncate">
-                      {lead.email}
-                    </p>
+              stats.recentLeads.map((lead, index) => (
+                <div key={index} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors duration-200">
+                  <div className="flex items-center">
+                    <div className="h-10 w-10 rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 flex items-center justify-center text-white font-semibold">
+                      {lead.name?.charAt(0)?.toUpperCase() || 'L'}
+                    </div>
+                    <div className="ml-3">
+                      <p className="font-medium text-slate-900">{lead.name || 'Unknown'}</p>
+                      <p className="text-sm text-slate-500">{lead.email || 'No email'}</p>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(lead.status)}`}>
-                      {lead.status}
-                    </span>
-                    <span className="text-xs text-gray-400">
-                      {format(new Date(lead.createdAt), 'MMM d')}
-                    </span>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-slate-900">{lead.status || 'New'}</p>
+                    <p className="text-xs text-slate-500">{format(new Date(lead.createdAt), 'MMM d')}</p>
                   </div>
                 </div>
               ))
             ) : (
-              <p className="text-sm text-gray-500 text-center py-4">No recent leads</p>
+              <div className="text-center py-8 text-slate-500">
+                <Users className="h-12 w-12 mx-auto mb-4 text-slate-300" />
+                <p>No recent leads</p>
+              </div>
             )}
           </div>
         </div>
 
         {/* Recent Properties */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">Recent Properties</h3>
-            <Home className="h-5 w-5 text-gray-400" />
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/20">
+          <div className="flex items-center justify-between mb-6">
+            <h2 className="text-xl font-bold text-slate-900">Recent Properties</h2>
+            <button className="text-blue-600 hover:text-blue-700 text-sm font-medium">
+              View all
+            </button>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-4">
             {stats.recentProperties.length > 0 ? (
-              stats.recentProperties.map((property) => (
-                <div key={property._id} className="flex items-center justify-between">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {property.title}
-                    </p>
-                    <p className="text-sm text-gray-500 truncate">
-                      {property.location}
-                    </p>
+              stats.recentProperties.map((property, index) => (
+                <div key={index} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl hover:bg-slate-100 transition-colors duration-200">
+                  <div className="flex items-center">
+                    <div className="h-10 w-10 rounded-xl bg-gradient-to-r from-green-500 to-emerald-600 flex items-center justify-center">
+                      <Home className="h-5 w-5 text-white" />
+                    </div>
+                    <div className="ml-3">
+                      <p className="font-medium text-slate-900">{property.title || 'Untitled Property'}</p>
+                      <p className="text-sm text-slate-500">{property.address || 'No address'}</p>
+                    </div>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm font-medium text-gray-900">
-                      ${property.price?.toLocaleString()}
-                    </span>
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(property.status)}`}>
-                      {property.status}
-                    </span>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-slate-900">${property.price?.toLocaleString() || 'N/A'}</p>
+                    <p className="text-xs text-slate-500">{property.status || 'Available'}</p>
                   </div>
                 </div>
               ))
             ) : (
-              <p className="text-sm text-gray-500 text-center py-4">No recent properties</p>
+              <div className="text-center py-8 text-slate-500">
+                <Building2 className="h-12 w-12 mx-auto mb-4 text-slate-300" />
+                <p>No recent properties</p>
+              </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Status Overview */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {/* Charts Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
         {/* Leads by Status */}
-        <div className="card">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Leads by Status</h3>
-          <div className="space-y-2">
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/20">
+          <h2 className="text-xl font-bold text-slate-900 mb-6">Leads by Status</h2>
+          <div className="space-y-4">
             {stats.leadsByStatus.length > 0 ? (
-              stats.leadsByStatus.map((status) => (
-                <div key={status._id} className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600 capitalize">{status._id}</span>
-                  <span className="text-sm font-medium text-gray-900">{status.count}</span>
+              stats.leadsByStatus.map((status, index) => (
+                <div key={index} className="flex items-center justify-between">
+                  <div className="flex items-center">
+                    <div className={`h-3 w-3 rounded-full mr-3 ${status._id === 'New' ? 'bg-blue-500' :
+                      status._id === 'Contacted' ? 'bg-yellow-500' :
+                        status._id === 'Qualified' ? 'bg-green-500' :
+                          'bg-slate-500'
+                      }`}></div>
+                    <span className="text-slate-700">{status._id || 'Unknown'}</span>
+                  </div>
+                  <span className="font-semibold text-slate-900">{status.count}</span>
                 </div>
               ))
             ) : (
-              <p className="text-sm text-gray-500 text-center py-4">No leads data</p>
+              <div className="text-center py-8 text-slate-500">
+                <BarChart3 className="h-12 w-12 mx-auto mb-4 text-slate-300" />
+                <p>No data available</p>
+              </div>
             )}
           </div>
         </div>
 
-        {/* Properties by Status */}
-        <div className="card">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">Properties by Status</h3>
-          <div className="space-y-2">
-            {stats.propertiesByStatus.length > 0 ? (
-              stats.propertiesByStatus.map((status) => (
-                <div key={status._id} className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600 capitalize">{status._id}</span>
-                  <span className="text-sm font-medium text-gray-900">{status.count}</span>
-                </div>
-              ))
-            ) : (
-              <p className="text-sm text-gray-500 text-center py-4">No properties data</p>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Platform Analytics */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Leads by Platform */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">Leads by Platform</h3>
-            <Globe className="h-5 w-5 text-gray-400" />
-          </div>
-          <div className="space-y-3">
+        <div className="bg-white/80 backdrop-blur-sm rounded-2xl p-6 shadow-lg border border-white/20">
+          <h2 className="text-xl font-bold text-slate-900 mb-6">Leads by Platform</h2>
+          <div className="space-y-4">
             {stats.leadsByPlatform.length > 0 ? (
               stats.leadsByPlatform.map((platform, index) => (
-                <div key={platform.platform} className="flex items-center justify-between">
-                  <div className="flex items-center space-x-3">
-                    <div className="flex-shrink-0">
-                      <div className={`w-3 h-3 rounded-full ${
-                        index === 0 ? 'bg-blue-500' :
-                        index === 1 ? 'bg-green-500' :
-                        index === 2 ? 'bg-yellow-500' :
-                        index === 3 ? 'bg-purple-500' :
-                        'bg-gray-400'
-                      }`}></div>
+                <div key={index} className="flex items-center justify-between">
+                  <div className="flex items-center">
+                    <div className="h-8 w-8 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 flex items-center justify-center mr-3">
+                      <Globe className="h-4 w-4 text-white" />
                     </div>
-                    <span className="text-sm font-medium text-gray-900">
-                      {platform.displayName}
-                    </span>
+                    <span className="text-slate-700">{platform.platform || 'Unknown'}</span>
                   </div>
-                  <div className="flex items-center space-x-2">
-                    <span className="text-sm font-medium text-gray-900">
-                      {platform.count}
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      ({Math.round((platform.count / stats.totalLeads) * 100)}%)
-                    </span>
-                  </div>
+                  <span className="font-semibold text-slate-900">{platform.count}</span>
                 </div>
               ))
             ) : (
-              <p className="text-sm text-gray-500 text-center py-4">No platform data</p>
-            )}
-          </div>
-        </div>
-
-        {/* Platform Performance */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">Platform Performance</h3>
-            <BarChart3 className="h-5 w-5 text-gray-400" />
-          </div>
-          <div className="space-y-3">
-            {stats.leadsByPlatform.length > 0 ? (
-              stats.leadsByPlatform.slice(0, 5).map((platform, index) => {
-                const percentage = Math.round((platform.count / stats.totalLeads) * 100);
-                return (
-                  <div key={platform.platform} className="space-y-1">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-900">
-                        {platform.displayName}
-                      </span>
-                      <span className="text-sm text-gray-500">
-                        {platform.count} leads
-                      </span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div
-                        className={`h-2 rounded-full ${
-                          index === 0 ? 'bg-blue-500' :
-                          index === 1 ? 'bg-green-500' :
-                          index === 2 ? 'bg-yellow-500' :
-                          index === 3 ? 'bg-purple-500' :
-                          'bg-gray-400'
-                        }`}
-                        style={{ width: `${percentage}%` }}
-                      ></div>
-                    </div>
-                    {platform.totalValue > 0 && (
-                      <div className="text-xs text-gray-500">
-                        Total Value: ${platform.totalValue.toLocaleString()}
-                      </div>
-                    )}
-                  </div>
-                );
-              })
-            ) : (
-              <p className="text-sm text-gray-500 text-center py-4">No performance data</p>
+              <div className="text-center py-8 text-slate-500">
+                <PieChart className="h-12 w-12 mx-auto mb-4 text-slate-300" />
+                <p>No data available</p>
+              </div>
             )}
           </div>
         </div>

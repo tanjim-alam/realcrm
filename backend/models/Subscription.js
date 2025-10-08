@@ -26,7 +26,7 @@ const subscriptionSchema = new mongoose.Schema({
   features: {
     maxLeads: {
       type: Number,
-      default: 50 // Free plan limit
+      default: 20 // Free plan limit
     },
     maxProperties: {
       type: Number,
@@ -50,10 +50,10 @@ const subscriptionSchema = new mongoose.Schema({
 });
 
 // Set plan features based on plan type
-subscriptionSchema.pre('save', function(next) {
+subscriptionSchema.pre('save', function (next) {
   const planFeatures = {
     free: {
-      maxLeads: 50,
+      maxLeads: 20,
       maxProperties: 10,
       maxUsers: 2,
       hasAnalytics: false,

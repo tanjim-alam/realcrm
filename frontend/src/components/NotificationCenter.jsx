@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import { Bell, X, Check, Trash2, MessageCircle } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import api from '../config/api';
-import io from 'socket.io-client';
 import toast from 'react-hot-toast';
 
 const NotificationCenter = () => {
@@ -11,7 +10,6 @@ const NotificationCenter = () => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [socket, setSocket] = useState(null);
 
   // Fetch notifications
   const fetchNotifications = async () => {
@@ -112,59 +110,6 @@ const NotificationCenter = () => {
     return () => clearInterval(interval);
   }, []);
 
-  // Socket.IO connection for real-time notifications
-  useEffect(() => {
-    if (!company?._id || !user?.id) {
-      console.log('Waiting for company and user data for notifications...', { company: company?._id, user: user?.id });
-      return;
-    }
-
-    console.log('Setting up notification socket connection...');
-    const newSocket = io(import.meta.env.VITE_API_URL || 'http://localhost:8080');
-    setSocket(newSocket);
-
-    newSocket.on('connect', () => {
-      console.log('Notification socket connected:', newSocket.id);
-      // Join company room for notifications
-      newSocket.emit('user-online', {
-        userId: user.id,
-        companyId: company._id
-      });
-      console.log('Emitted user-online for notifications');
-    });
-
-    newSocket.on('connect_error', (error) => {
-      console.error('Notification socket connection error:', error);
-    });
-
-    newSocket.on('disconnect', (reason) => {
-      console.log('Notification socket disconnected:', reason);
-    });
-
-    // Listen for new notifications
-    newSocket.on('new-notification', (data) => {
-      console.log('New notification received:', data);
-      // Show toast notification
-      toast.success(data.message || 'You have a new notification');
-      // Refresh unread count
-      fetchUnreadCount();
-      // Refresh notifications if dropdown is open
-      if (isOpen) {
-        fetchNotifications();
-      }
-    });
-
-    // Test event listener for debugging
-    newSocket.on('test-event', (data) => {
-      console.log('Test event received:', data);
-      toast.success('Test event received!');
-    });
-
-    return () => {
-      console.log('Cleaning up notification socket connection');
-      newSocket.close();
-    };
-  }, [company, user]); // Removed isOpen from dependencies
 
   return (
     <div className="relative">
@@ -257,9 +202,8 @@ const NotificationCenter = () => {
               notifications.map((notification) => (
                 <div
                   key={notification._id}
-                  className={`p-4 border-b border-gray-100 hover:bg-gray-50 ${
-                    !notification.isRead ? 'bg-blue-50' : ''
-                  }`}
+                  className={`p-4 border-b border-gray-100 hover:bg-gray-50 ${!notification.isRead ? 'bg-blue-50' : ''
+                    }`}
                 >
                   <div className="flex items-start space-x-3">
                     <div className="flex-shrink-0">

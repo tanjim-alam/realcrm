@@ -5,6 +5,7 @@ const Task = require('../models/Task');
 const Lead = require('../models/Lead');
 const Property = require('../models/Property');
 const User = require('../models/User');
+const notificationService = require('../services/notificationService');
 
 const router = express.Router();
 
@@ -102,7 +103,7 @@ router.get('/', authMiddleware, async (req, res) => {
           default:
             continue;
         }
-        
+
         try {
           const relatedEntity = await relatedModel.findById(task.relatedTo.id);
           if (relatedEntity) {
@@ -136,7 +137,7 @@ router.get('/', authMiddleware, async (req, res) => {
 router.get('/my-tasks', authMiddleware, async (req, res) => {
   try {
     const { status, priority, category } = req.query;
-    
+
     const filters = {};
     if (status) filters.status = status;
     if (priority) filters.priority = priority;
@@ -183,6 +184,12 @@ router.get('/stats', authMiddleware, async (req, res) => {
   try {
     const companyId = req.user.companyId;
 
+    // Build match criteria based on user role
+    const matchCriteria = { companyId };
+    if (req.user.role === 'agent') {
+      matchCriteria.assignedTo = req.user.id;
+    }
+
     const [
       totalTasks,
       pendingTasks,
@@ -193,51 +200,51 @@ router.get('/stats', authMiddleware, async (req, res) => {
       highPriorityTasks,
       urgentTasks
     ] = await Promise.all([
-      Task.countDocuments({ companyId }),
-      Task.countDocuments({ companyId, status: 'pending' }),
-      Task.countDocuments({ companyId, status: 'in_progress' }),
-      Task.countDocuments({ companyId, status: 'completed' }),
+      Task.countDocuments(matchCriteria),
+      Task.countDocuments({ ...matchCriteria, status: 'pending' }),
+      Task.countDocuments({ ...matchCriteria, status: 'in_progress' }),
+      Task.countDocuments({ ...matchCriteria, status: 'completed' }),
       Task.countDocuments({
-        companyId,
+        ...matchCriteria,
         status: { $in: ['pending', 'in_progress'] },
         dueDate: { $lt: new Date() }
       }),
       Task.countDocuments({
-        companyId,
+        ...matchCriteria,
         status: { $in: ['pending', 'in_progress'] },
         dueDate: {
           $gte: new Date(new Date().setHours(0, 0, 0, 0)),
           $lte: new Date(new Date().setHours(23, 59, 59, 999))
         }
       }),
-      Task.countDocuments({ companyId, priority: 'high' }),
-      Task.countDocuments({ companyId, priority: 'urgent' })
+      Task.countDocuments({ ...matchCriteria, priority: 'high' }),
+      Task.countDocuments({ ...matchCriteria, priority: 'urgent' })
     ]);
 
     // Tasks by priority
     const tasksByPriority = await Task.aggregate([
-      { $match: { companyId } },
+      { $match: matchCriteria },
       { $group: { _id: '$priority', count: { $sum: 1 } } }
     ]);
 
     // Tasks by status
     const tasksByStatus = await Task.aggregate([
-      { $match: { companyId } },
+      { $match: matchCriteria },
       { $group: { _id: '$status', count: { $sum: 1 } } }
     ]);
 
     // Tasks by category
     const tasksByCategory = await Task.aggregate([
-      { $match: { companyId } },
+      { $match: matchCriteria },
       { $group: { _id: '$category', count: { $sum: 1 } } }
     ]);
 
     // Recent completed tasks (last 7 days)
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-    
+
     const recentCompleted = await Task.countDocuments({
-      companyId,
+      ...matchCriteria,
       status: 'completed',
       completedAt: { $gte: sevenDaysAgo }
     });
@@ -275,9 +282,9 @@ router.get('/:id', authMiddleware, async (req, res) => {
       _id: req.params.id,
       companyId: req.user.companyId
     })
-    .populate('assignedTo', 'name email')
-    .populate('createdBy', 'name email')
-    .populate('comments.user', 'name email');
+      .populate('assignedTo', 'name email')
+      .populate('createdBy', 'name email')
+      .populate('comments.user', 'name email');
 
     // Manually populate related entity if needed
     if (task && task.relatedTo && task.relatedTo.type !== 'none' && task.relatedTo.id) {
@@ -290,7 +297,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
           relatedModel = Property;
           break;
       }
-      
+
       if (relatedModel) {
         try {
           const relatedEntity = await relatedModel.findById(task.relatedTo.id);
@@ -319,7 +326,10 @@ router.get('/:id', authMiddleware, async (req, res) => {
 // @access  Private
 router.post('/', [
   body('title').notEmpty().withMessage('Title is required'),
-  body('assignedTo').isMongoId().withMessage('Valid assigned user is required'),
+  body('assignedTo').notEmpty().withMessage('Assigned user is required for new tasks').custom((value) => {
+    if (value === null || value === '') return false; // Require assignedTo for new tasks
+    return require('mongoose').Types.ObjectId.isValid(value); // Validate MongoDB ObjectId
+  }).withMessage('Valid assigned user ID is required'),
   body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
   body('status').optional().isIn(['pending', 'in_progress', 'completed', 'cancelled']),
   body('category').optional().isIn(['follow_up', 'meeting', 'call', 'email', 'document', 'inspection', 'negotiation', 'closing', 'other']),
@@ -351,14 +361,26 @@ router.post('/', [
       relatedTo.id = null;
     }
 
-    // Verify assigned user exists and belongs to company
-    const assignedUser = await User.findOne({
-      _id: assignedTo,
-      companyId: req.user.companyId
-    });
+    // Verify assigned user exists and belongs to company (if assignedTo is provided)
+    let assignedUser = null;
+    if (assignedTo && assignedTo !== '' && assignedTo !== null) {
+      assignedUser = await User.findOne({
+        _id: assignedTo,
+        companyId: req.user.companyId
+      });
 
-    if (!assignedUser) {
-      return res.status(400).json({ message: 'Assigned user not found' });
+      if (!assignedUser) {
+        return res.status(400).json({ message: 'Assigned user not found' });
+      }
+
+      // Hierarchical permission check
+      // Admin can assign to anyone (admin, agent)
+      // Agent can assign to other agents, but NOT to admins
+      if (req.user.role === 'agent' && assignedUser.role === 'admin') {
+        return res.status(403).json({
+          message: 'Agents cannot assign tasks to admin users'
+        });
+      }
     }
 
     // Verify related entity if specified
@@ -389,7 +411,7 @@ router.post('/', [
       companyId: req.user.companyId,
       title,
       description,
-      assignedTo,
+      assignedTo: assignedTo || null, // Handle null/empty assignedTo
       createdBy: req.user.id,
       priority,
       status,
@@ -409,6 +431,18 @@ router.post('/', [
       { path: 'createdBy', select: 'name email' }
     ]);
 
+    // Send task assignment notification (only if task is assigned)
+    if (assignedUser) {
+      try {
+        console.log('🔔 Sending task assignment notification...');
+        await notificationService.createTaskAssignmentNotification(task, assignedUser, req.user);
+        console.log('✅ Task assignment notification sent successfully');
+      } catch (notificationError) {
+        console.error('❌ Failed to send task assignment notification:', notificationError);
+        // Don't fail the task creation if notification fails
+      }
+    }
+
     res.status(201).json(task);
   } catch (error) {
     console.error('Create task error:', error);
@@ -417,8 +451,8 @@ router.post('/', [
       stack: error.stack,
       body: req.body
     });
-    res.status(500).json({ 
-      message: 'Server error', 
+    res.status(500).json({
+      message: 'Server error',
       error: error.message,
       details: 'Check server logs for more information'
     });
@@ -430,6 +464,10 @@ router.post('/', [
 // @access  Private
 router.put('/:id', [
   body('title').optional().notEmpty().withMessage('Title cannot be empty'),
+  body('assignedTo').optional().custom((value) => {
+    if (value === null || value === '') return true; // Allow null/empty
+    return require('mongoose').Types.ObjectId.isValid(value); // Validate MongoDB ObjectId
+  }).withMessage('Valid assigned user ID is required'),
   body('priority').optional().isIn(['low', 'medium', 'high', 'urgent']),
   body('status').optional().isIn(['pending', 'in_progress', 'completed', 'cancelled']),
   body('category').optional().isIn(['follow_up', 'meeting', 'call', 'email', 'document', 'inspection', 'negotiation', 'closing', 'other']),
@@ -475,15 +513,20 @@ router.put('/:id', [
     if (title !== undefined) task.title = title;
     if (description !== undefined) task.description = description;
     if (assignedTo !== undefined) {
-      // Verify assigned user exists
-      const assignedUser = await User.findOne({
-        _id: assignedTo,
-        companyId: req.user.companyId
-      });
-      if (!assignedUser) {
-        return res.status(400).json({ message: 'Assigned user not found' });
+      if (assignedTo === null || assignedTo === '') {
+        // Allow unassigning the task
+        task.assignedTo = null;
+      } else {
+        // Verify assigned user exists
+        const assignedUser = await User.findOne({
+          _id: assignedTo,
+          companyId: req.user.companyId
+        });
+        if (!assignedUser) {
+          return res.status(400).json({ message: 'Assigned user not found' });
+        }
+        task.assignedTo = assignedTo;
       }
-      task.assignedTo = assignedTo;
     }
     if (priority !== undefined) task.priority = priority;
     if (category !== undefined) task.category = category;

@@ -6,7 +6,7 @@ const socketIo = require('socket.io');
 const connectDB = require('./config/database');
 const reminderService = require('./services/reminderService');
 const userStatusService = require('./services/userStatusService');
-const chatPresenceService = require('./services/chatPresenceService');
+const notificationService = require('./services/notificationService');
 require('dotenv').config();
 
 const app = express();
@@ -16,18 +16,18 @@ connectDB();
 
 
 const corsOptions = {
-	origin: [
-		'http://localhost:5173',  // Default Vite dev server
-		'http://localhost:3000',  // Alternative React dev server
-		'http://localhost:5174' ,
-        'http://127.0.0.1:5502'
-         // Your current setting
-	],
-	credentials: true,
-	methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-	allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-	exposedHeaders: ['Set-Cookie'],
-	optionsSuccessStatus: 200
+  origin: [
+    'http://localhost:5173',  // Default Vite dev server
+    'http://localhost:3000',  // Alternative React dev server
+    'http://localhost:5174',
+    'http://127.0.0.1:5502'
+    // Your current setting
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  exposedHeaders: ['Set-Cookie'],
+  optionsSuccessStatus: 200
 };
 // Middleware
 app.use(cors(corsOptions));
@@ -36,6 +36,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/leads', require('./routes/leads'));
 app.use('/api/properties', require('./routes/properties'));
 app.use('/api/subscription', require('./routes/subscription'));
@@ -45,12 +46,12 @@ app.use('/api/webhooks', require('./routes/webhooks'));
 app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/email-templates', require('./routes/emailTemplates'));
 app.use('/api/email-campaigns', require('./routes/emailCampaigns'));
+app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/test-email', require('./routes/testEmail'));
 app.use('/api/company', require('./routes/company'));
 app.use('/api/documents', require('./routes/documents'));
 app.use('/api/lead-scoring', require('./routes/leadScoring'));
 app.use('/api/tasks', require('./routes/tasks'));
-app.use('/api/chat', require('./routes/chat'));
 // SMS routes (optional - only load if Twilio is available)
 try {
   // Check if Twilio is available before loading routes
@@ -64,12 +65,14 @@ try {
   app.use('/api/sms', (req, res) => res.status(503).json({ message: 'SMS service not available' }));
   app.use('/api/sms-campaigns', (req, res) => res.status(503).json({ message: 'SMS service not available' }));
 }
-app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/chat', require('./routes/chat'));
+app.use('/api/lead-generation', require('./routes/leadGeneration'));
+app.use('/api/dashboard-builder', require('./routes/dashboardBuilder'));
 
 // Serve static files from React app in production
 if (process.env.NODE_ENV === 'production') {
   app.use(express.static(path.join(__dirname, '../frontend/dist')));
-  
+
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
   });
@@ -100,80 +103,56 @@ const io = socketIo(server, {
       'http://localhost:5174',
       'http://127.0.0.1:5502'
     ],
-    methods: ['GET', 'POST']
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
+
+// Make io available globally
+app.set('io', io);
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  // Handle user authentication and status
-  socket.on('user-online', (data) => {
-    const { userId, companyId } = data;
-    console.log('User online event received:', data);
-    if (userId && companyId) {
-      userStatusService.setUserOnline(userId, socket.id);
-      socket.userId = userId;
-      socket.companyId = companyId;
-      
-      // Join user to their company room
+  // Handle user authentication
+  socket.on('authenticate', async (data) => {
+    try {
+      const { token, userId, companyId } = data;
+      console.log(`Authenticating user ${userId} with company ${companyId}`);
+
+      // Join company room
       socket.join(`company-${companyId}`);
-      console.log(`User ${userId} is online and joined company ${companyId}`);
-      
-      // Notify other users in the company about status change
-      socket.to(`company-${companyId}`).emit('user-status-changed', {
-        userId,
-        status: 'online',
-        lastSeen: new Date()
-      });
-      
-      // Also notify the user themselves about their own status
-      socket.emit('user-status-changed', {
-        userId,
-        status: 'online',
-        lastSeen: new Date()
-      });
+      socket.join(`user-${userId}`);
+
+      // Set user as online
+      userStatusService.setUserOnline(userId, socket.id);
+
+      // Notify others in the company that user is online
+      socket.to(`company-${companyId}`).emit('user-online', { userId });
+
+      console.log(`User ${userId} authenticated and joined company ${companyId}`);
+      console.log(`Socket ${socket.id} joined rooms: company-${companyId}, user-${userId}`);
+    } catch (error) {
+      console.error('Authentication error:', error);
+      socket.emit('auth-error', { message: 'Authentication failed' });
     }
   });
 
-  // Join specific chat room
+  // Handle joining chat
   socket.on('join-chat', (chatId) => {
     socket.join(`chat-${chatId}`);
-    console.log(`User ${socket.id} joined chat ${chatId}`);
+    console.log(`User joined chat: ${chatId}`);
+    console.log(`Socket ${socket.id} joined room: chat-${chatId}`);
   });
 
-  // Leave chat room
+  // Handle leaving chat
   socket.on('leave-chat', (chatId) => {
     socket.leave(`chat-${chatId}`);
-    console.log(`User ${socket.id} left chat ${chatId}`);
+    console.log(`User left chat: ${chatId}`);
   });
 
-  // User enters chat page
-  socket.on('user-on-chat-page', (data) => {
-    const { userId } = data;
-    if (userId && socket.userId === userId) {
-      chatPresenceService.setUserOnChatPage(userId, socket.id);
-      console.log(`User ${userId} is now on chat page`);
-    }
-  });
-
-  // User leaves chat page (but still connected)
-  socket.on('user-off-chat-page', (data) => {
-    const { userId } = data;
-    if (userId && socket.userId === userId) {
-      chatPresenceService.setUserOffChatPage(userId);
-      console.log(`User ${userId} left chat page`);
-    }
-  });
-
-  // Handle new message
-  socket.on('new-message', (data) => {
-    // Broadcast to all users in the chat room
-    socket.to(`chat-${data.chatId}`).emit('message-received', data);
-  });
-
-  // Handle typing indicator
+  // Handle typing indicators
   socket.on('typing', (data) => {
     socket.to(`chat-${data.chatId}`).emit('user-typing', {
       userId: data.userId,
@@ -182,7 +161,6 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Handle stop typing
   socket.on('stop-typing', (data) => {
     socket.to(`chat-${data.chatId}`).emit('user-stop-typing', {
       userId: data.userId,
@@ -190,39 +168,72 @@ io.on('connection', (socket) => {
     });
   });
 
-  // Handle ping for keeping connection alive
-  socket.on('ping', () => {
-    if (socket.userId) {
-      userStatusService.updateLastSeen(socket.userId);
+  // Handle presence updates
+  socket.on('presence-update', (data) => {
+    userStatusService.setUserPresence(data.userId, data.isOnChatPage);
+
+    // Notify others in the company
+    socket.to(`company-${data.companyId}`).emit('presence-update', {
+      userId: data.userId,
+      isOnChatPage: data.isOnChatPage
+    });
+  });
+
+  // Handle page tracking
+  socket.on('page-change', (data) => {
+    const { userId, companyId, currentPage } = data;
+
+    // Store current page for user
+    userStatusService.setUserPage(userId, currentPage);
+
+    console.log(`User ${userId} is now on page: ${currentPage}`);
+  });
+
+
+  // Handle message delivery confirmation
+  socket.on('message-delivered', (data) => {
+    socket.to(`chat-${data.chatId}`).emit('message-delivered', {
+      messageId: data.messageId,
+      deliveredAt: new Date()
+    });
+  });
+
+  // Handle message read confirmation
+  socket.on('message-read', (data) => {
+    socket.to(`chat-${data.chatId}`).emit('message-read', {
+      messageId: data.messageId,
+      readBy: data.userId,
+      readAt: new Date()
+    });
+  });
+
+  // Handle notification connection
+  socket.on('join-notifications', (data) => {
+    if (data.userId) {
+      socket.userId = data.userId; // Store userId in socket object
+      notificationService.addClient(data.userId, socket);
+      console.log(`User ${data.userId} joined notifications`);
     }
-    socket.emit('pong');
   });
 
   // Handle disconnect
   socket.on('disconnect', () => {
-    if (socket.userId && socket.companyId) {
-      userStatusService.setUserOffline(socket.id);
-      chatPresenceService.removeUser(socket.userId);
-      
-      // Notify other users in the company about status change
-      socket.to(`company-${socket.companyId}`).emit('user-status-changed', {
-        userId: socket.userId,
-        status: 'offline',
-        lastSeen: new Date()
-      });
-      
-      console.log(`User ${socket.userId} is offline`);
-    }
     console.log('User disconnected:', socket.id);
+
+    // Set user as offline
+    userStatusService.setUserOffline(socket.id);
+
+    // Remove from notification service
+    notificationService.removeClient(socket.userId, socket);
+
+    // Notify others that user is offline
+    socket.broadcast.emit('user-offline', { socketId: socket.id });
   });
 });
 
-// Make io available to routes
-app.set('io', io);
-
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  
+
   // Start reminder service after server is running
   reminderService.start();
 });

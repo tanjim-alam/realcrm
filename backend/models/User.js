@@ -73,15 +73,59 @@ const userSchema = new mongoose.Schema({
       enum: ['immediate', 'within_hour', 'within_day', 'within_week'],
       default: 'within_day'
     }
+  },
+  notificationEmail: {
+    type: String,
+    trim: true,
+    lowercase: true
+  },
+  notificationSettings: {
+    email: {
+      newLeads: { type: Boolean, default: true },
+      leadAssignments: { type: Boolean, default: true },
+      taskAssignments: { type: Boolean, default: true },
+      leadReminders: { type: Boolean, default: true },
+      newProperties: { type: Boolean, default: true },
+      newTasks: { type: Boolean, default: true },
+      systemUpdates: { type: Boolean, default: true },
+      marketing: { type: Boolean, default: false }
+    },
+    push: {
+      newLeads: { type: Boolean, default: true },
+      leadAssignments: { type: Boolean, default: true },
+      taskAssignments: { type: Boolean, default: true },
+      leadReminders: { type: Boolean, default: true },
+      newProperties: { type: Boolean, default: true },
+      newTasks: { type: Boolean, default: true },
+      systemUpdates: { type: Boolean, default: true },
+      marketing: { type: Boolean, default: false }
+    },
+    frequency: {
+      type: String,
+      enum: ['immediate', 'daily', 'weekly'],
+      default: 'immediate'
+    },
+    quietHours: {
+      enabled: { type: Boolean, default: false },
+      start: { type: String, default: '22:00' },
+      end: { type: String, default: '08:00' }
+    },
+    reminderTimeline: {
+      enabled: { type: Boolean, default: true },
+      intervals: [{
+        hours: { type: Number, required: true },
+        label: { type: String, required: true }
+      }]
+    }
   }
 }, {
   timestamps: true
 });
 
 // Hash password before saving
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   if (!this.isModified('password')) return next();
-  
+
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
@@ -92,7 +136,7 @@ userSchema.pre('save', async function(next) {
 });
 
 // Compare password method
-userSchema.methods.comparePassword = async function(candidatePassword) {
+userSchema.methods.comparePassword = async function (candidatePassword) {
   return await bcrypt.compare(candidatePassword, this.password);
 };
 

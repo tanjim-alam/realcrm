@@ -15,7 +15,7 @@ router.use(authMiddleware);
 router.get('/', async (req, res) => {
   try {
     const { status, propertyType, page = 1, limit = 10 } = req.query;
-    
+
     // Build filter object
     const filter = { companyId: req.user.companyId };
     if (status) filter.status = status;
@@ -67,13 +67,16 @@ router.get('/:id', async (req, res) => {
 // @access  Private
 router.post('/', [
   body('title').notEmpty().withMessage('Title is required'),
-  body('price').isNumeric().withMessage('Price must be a number'),
-  body('location').notEmpty().withMessage('Location is required'),
-  body('propertyType').isIn(['apartment', 'house', 'condo', 'townhouse', 'commercial', 'land', 'other']).withMessage('Invalid property type'),
-  body('status').optional().isIn(['available', 'pending', 'sold', 'rented']),
-  body('bedrooms').optional().isInt({ min: 0 }),
-  body('bathrooms').optional().isInt({ min: 0 }),
-  body('area').optional().isNumeric({ min: 0 })
+  body('price.value').isNumeric().withMessage('Price value must be a number'),
+  body('location.address').notEmpty().withMessage('Address is required'),
+  body('location.city').notEmpty().withMessage('City is required'),
+  body('propertyType').isIn(['apartment', 'house', 'villa', 'condo', 'townhouse', 'commercial', 'land', 'plot', 'farmhouse', 'penthouse', 'studio', 'other']).withMessage('Invalid property type'),
+  body('status').optional().isIn(['available', 'pending', 'sold', 'rented', 'pre_launch', 'launched', 'under_construction', 'ready_to_move']),
+  body('configuration.bathrooms').optional().isInt({ min: 0 }),
+  body('configuration.balconies').optional().isInt({ min: 0 }),
+  body('area.builtUp').optional().isNumeric({ min: 0 }),
+  body('area.carpet').optional().isNumeric({ min: 0 }),
+  body('area.superBuiltUp').optional().isNumeric({ min: 0 })
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -84,10 +87,10 @@ router.post('/', [
     // Check subscription limits
     const subscription = await Subscription.findOne({ companyId: req.user.companyId });
     const propertyCount = await Property.countDocuments({ companyId: req.user.companyId });
-    
+
     if (subscription && subscription.features.maxProperties !== -1 && propertyCount >= subscription.features.maxProperties) {
-      return res.status(403).json({ 
-        message: 'Property limit reached. Please upgrade your plan to add more properties.' 
+      return res.status(403).json({
+        message: 'Property limit reached. Please upgrade your plan to add more properties.'
       });
     }
 
@@ -115,13 +118,16 @@ router.post('/', [
 // @access  Private
 router.put('/:id', [
   body('title').optional().notEmpty().withMessage('Title cannot be empty'),
-  body('price').optional().isNumeric().withMessage('Price must be a number'),
-  body('location').optional().notEmpty().withMessage('Location cannot be empty'),
-  body('propertyType').optional().isIn(['apartment', 'house', 'condo', 'townhouse', 'commercial', 'land', 'other']),
-  body('status').optional().isIn(['available', 'pending', 'sold', 'rented']),
-  body('bedrooms').optional().isInt({ min: 0 }),
-  body('bathrooms').optional().isInt({ min: 0 }),
-  body('area').optional().isNumeric({ min: 0 })
+  body('price.value').optional().isNumeric().withMessage('Price value must be a number'),
+  body('location.address').optional().notEmpty().withMessage('Address cannot be empty'),
+  body('location.city').optional().notEmpty().withMessage('City cannot be empty'),
+  body('propertyType').optional().isIn(['apartment', 'house', 'villa', 'condo', 'townhouse', 'commercial', 'land', 'plot', 'farmhouse', 'penthouse', 'studio', 'other']),
+  body('status').optional().isIn(['available', 'pending', 'sold', 'rented', 'pre_launch', 'launched', 'under_construction', 'ready_to_move']),
+  body('configuration.bathrooms').optional().isInt({ min: 0 }),
+  body('configuration.balconies').optional().isInt({ min: 0 }),
+  body('area.builtUp').optional().isNumeric({ min: 0 }),
+  body('area.carpet').optional().isNumeric({ min: 0 }),
+  body('area.superBuiltUp').optional().isNumeric({ min: 0 })
 ], async (req, res) => {
   try {
     const errors = validationResult(req);

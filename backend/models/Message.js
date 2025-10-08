@@ -23,7 +23,7 @@ const messageSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['text', 'image', 'file', 'system', 'emoji'],
+    enum: ['text', 'image', 'file', 'system', 'emoji', 'location'],
     default: 'text'
   },
   // For file messages
@@ -32,7 +32,14 @@ const messageSchema = new mongoose.Schema({
     originalName: String,
     mimetype: String,
     size: Number,
-    url: String
+    url: String,
+    thumbnail: String
+  },
+  // For location messages
+  location: {
+    latitude: Number,
+    longitude: Number,
+    address: String
   },
   // For edited messages
   editedAt: {
@@ -88,7 +95,32 @@ const messageSchema = new mongoose.Schema({
     pinnedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
+    },
+    isForwarded: {
+      type: Boolean,
+      default: false
+    },
+    forwardedFrom: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Message'
     }
+  },
+  // Delivery status
+  deliveryStatus: {
+    sent: {
+      type: Boolean,
+      default: true
+    },
+    delivered: {
+      type: Boolean,
+      default: false
+    },
+    deliveredAt: Date,
+    read: {
+      type: Boolean,
+      default: false
+    },
+    readAt: Date
   }
 }, {
   timestamps: true
@@ -99,6 +131,8 @@ messageSchema.index({ chatId: 1, createdAt: -1 });
 messageSchema.index({ companyId: 1, createdAt: -1 });
 messageSchema.index({ sender: 1 });
 messageSchema.index({ 'readBy.user': 1 });
+messageSchema.index({ 'deliveryStatus.delivered': 1 });
+messageSchema.index({ 'deliveryStatus.read': 1 });
 
 // Method to add reaction
 messageSchema.methods.addReaction = function(userId, emoji) {
@@ -131,6 +165,21 @@ messageSchema.methods.markAsRead = function(userId) {
       user: userId,
       readAt: new Date()
     });
+    
+    // Update delivery status
+    this.deliveryStatus.read = true;
+    this.deliveryStatus.readAt = new Date();
+    
+    return this.save();
+  }
+  return Promise.resolve(this);
+};
+
+// Method to mark as delivered
+messageSchema.methods.markAsDelivered = function() {
+  if (!this.deliveryStatus.delivered) {
+    this.deliveryStatus.delivered = true;
+    this.deliveryStatus.deliveredAt = new Date();
     return this.save();
   }
   return Promise.resolve(this);
@@ -165,8 +214,8 @@ messageSchema.statics.getChatMessages = function(chatId, page = 1, limit = 50) {
     chatId,
     isDeleted: false
   })
-  .populate('sender', 'name email')
-  .populate('replyTo', 'content sender')
+  .populate('sender', 'name email avatar')
+  .populate('replyTo', 'content sender type')
   .populate('replyTo.sender', 'name email')
   .populate('readBy.user', 'name email')
   .populate('reactions.user', 'name email')
@@ -183,8 +232,9 @@ messageSchema.statics.getUnreadCount = async function(userId, companyId) {
     const userChats = await Chat.find({
       companyId: companyId,
       'participants.user': userId,
-      'participants.isActive': true
-    }).select('_id');
+      'participants.isActive': true,
+      'metadata.isArchived': false
+    }).select('_id participants');
 
     const chatIds = userChats.map(chat => chat._id);
 
@@ -219,6 +269,68 @@ messageSchema.statics.getUnreadCount = async function(userId, companyId) {
     console.error('getUnreadCount error:', error);
     return [];
   }
+};
+
+// Static method to mark messages as delivered
+messageSchema.statics.markAsDelivered = function(chatId, userId) {
+  return this.updateMany(
+    {
+      chatId,
+      sender: { $ne: userId },
+      'deliveryStatus.delivered': false
+    },
+    {
+      $set: {
+        'deliveryStatus.delivered': true,
+        'deliveryStatus.deliveredAt': new Date()
+      }
+    }
+  );
+};
+
+// Static method to get message statistics
+messageSchema.statics.getMessageStats = function(chatId, startDate, endDate) {
+  const matchQuery = { chatId, isDeleted: false };
+  
+  if (startDate && endDate) {
+    matchQuery.createdAt = {
+      $gte: new Date(startDate),
+      $lte: new Date(endDate)
+    };
+  }
+
+  return this.aggregate([
+    { $match: matchQuery },
+    {
+      $group: {
+        _id: null,
+        totalMessages: { $sum: 1 },
+        textMessages: {
+          $sum: { $cond: [{ $eq: ['$type', 'text'] }, 1, 0] }
+        },
+        fileMessages: {
+          $sum: { $cond: [{ $eq: ['$type', 'file'] }, 1, 0] }
+        },
+        imageMessages: {
+          $sum: { $cond: [{ $eq: ['$type', 'image'] }, 1, 0] }
+        },
+        avgReadTime: {
+          $avg: {
+            $cond: [
+              { $gt: ['$deliveryStatus.readAt', null] },
+              {
+                $divide: [
+                  { $subtract: ['$deliveryStatus.readAt', '$createdAt'] },
+                  1000 * 60 // Convert to minutes
+                ]
+              },
+              null
+            ]
+          }
+        }
+      }
+    }
+  ]);
 };
 
 module.exports = mongoose.model('Message', messageSchema);

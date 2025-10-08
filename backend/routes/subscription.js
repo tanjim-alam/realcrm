@@ -15,20 +15,79 @@ router.use(authMiddleware);
 router.get('/status', async (req, res) => {
   try {
     const subscription = await Subscription.findOne({ companyId: req.user.companyId });
-    
+
     if (!subscription) {
       return res.status(404).json({ message: 'Subscription not found' });
     }
 
     // Check if subscription is expired
     const isExpired = subscription.endDate && new Date() > subscription.endDate;
-    
+
     res.json({
       ...subscription.toObject(),
       isExpired
     });
   } catch (error) {
     console.error('Get subscription status error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// @route   POST /api/subscription/fix
+// @desc    Fix subscription plan (set to Basic if not set)
+// @access  Private
+router.post('/fix', async (req, res) => {
+  try {
+    const companyId = req.user.companyId;
+
+    console.log('🔧 Fixing subscription for company:', companyId);
+
+    let subscription = await Subscription.findOne({ companyId });
+
+    if (!subscription) {
+      console.log('❌ No subscription found, creating Basic plan...');
+      subscription = new Subscription({
+        companyId,
+        plan: 'basic',
+        isActive: true
+      });
+      await subscription.save();
+      console.log('✅ Basic subscription created');
+    } else {
+      console.log('🔄 Updating subscription to free plan with 10 maxLeads...');
+      subscription.plan = 'free';
+      subscription.isActive = true;
+      // Force update features to match the current model
+      subscription.features = {
+        maxLeads: 10,
+        maxProperties: 10,
+        maxUsers: 2,
+        hasAnalytics: false,
+        hasCustomBranding: false
+      };
+      await subscription.save();
+      console.log('✅ Subscription updated to free plan with 10 maxLeads');
+    }
+
+    // Get current lead count
+    const Lead = require('../models/Lead');
+    const leadCount = await Lead.countDocuments({ companyId });
+
+    res.json({
+      message: 'Subscription fixed successfully',
+      subscription: {
+        plan: subscription.plan,
+        maxLeads: subscription.features.maxLeads,
+        maxProperties: subscription.features.maxProperties,
+        maxUsers: subscription.features.maxUsers,
+        isActive: subscription.isActive
+      },
+      currentLeadCount: leadCount,
+      remainingLeads: subscription.features.maxLeads === -1 ? 'Unlimited' : subscription.features.maxLeads - leadCount
+    });
+
+  } catch (error) {
+    console.error('Fix subscription error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -50,7 +109,7 @@ router.post('/activate', [
     const { plan, duration = 30 } = req.body;
 
     let subscription = await Subscription.findOne({ companyId: req.user.companyId });
-    
+
     if (!subscription) {
       // Create new subscription
       subscription = new Subscription({
@@ -95,7 +154,7 @@ router.get('/plans', async (req, res) => {
         price: 0,
         duration: 'Unlimited',
         features: {
-          maxLeads: 50,
+          maxLeads: 10,
           maxProperties: 10,
           maxUsers: 2,
           hasAnalytics: false,
@@ -146,7 +205,7 @@ router.get('/plans', async (req, res) => {
 router.get('/usage', async (req, res) => {
   try {
     const subscription = await Subscription.findOne({ companyId: req.user.companyId });
-    
+
     if (!subscription) {
       return res.status(404).json({ message: 'Subscription not found' });
     }

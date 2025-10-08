@@ -1,930 +1,311 @@
-const { sendEmail } = require('../config/email');
-const NotificationSettings = require('../models/NotificationSettings');
-const Company = require('../models/Company');
+const Notification = require('../models/Notification');
+const User = require('../models/User');
+const { sendNotificationEmail, sendTestEmail } = require('./emailService');
 
 class NotificationService {
-  constructor() {
-    console.log('📧 Using existing email configuration from config/email.js');
-  }
-
-  async getNotificationSettings(companyId) {
-    try {
-      let settings = await NotificationSettings.findOne({ companyId });
-      
-      if (!settings) {
-        // Create default settings if none exist
-        settings = new NotificationSettings({
-          companyId,
-          email: process.env.DEFAULT_NOTIFICATION_EMAIL || 'admin@yourcompany.com',
-          notifications: {
-            newLead: { enabled: true, email: process.env.DEFAULT_NOTIFICATION_EMAIL || 'admin@yourcompany.com' },
-            leadStatusChange: { enabled: true, email: process.env.DEFAULT_NOTIFICATION_EMAIL || 'admin@yourcompany.com' },
-            leadAssignment: { enabled: true, email: process.env.DEFAULT_NOTIFICATION_EMAIL || 'admin@yourcompany.com' },
-            dailySummary: { enabled: false, email: process.env.DEFAULT_NOTIFICATION_EMAIL || 'admin@yourcompany.com', time: '09:00' },
-            reminder: { enabled: true, email: process.env.DEFAULT_NOTIFICATION_EMAIL || 'admin@yourcompany.com', advanceTime: 15 }
-          }
-        });
-        await settings.save();
-      }
-      
-      return settings;
-    } catch (error) {
-      console.error('Error getting notification settings:', error);
-      return null;
+    constructor() {
+        this.clients = new Map();
     }
-  }
 
-  async sendNewLeadNotification(lead, company) {
-    try {
-      const settings = await this.getNotificationSettings(company._id);
-      
-      if (!settings || !settings.notifications?.newLead?.enabled || !settings.notifications?.newLead?.email) {
-        console.log('📧 New lead notification skipped - not enabled or no email configured');
-        return { success: false, message: 'Notification not enabled' };
-      }
-
-      const { subject, html, text } = this.generateNewLeadEmailContent(lead, company);
-      
-      const result = await sendEmail(
-        settings.notifications.newLead.email,
-        subject,
-        html,
-        text,
-        { name: company.name, email: company.email }
-      );
-
-      if (result.success) {
-        console.log('✅ New lead notification sent successfully');
-      } else {
-        console.error('❌ Failed to send new lead notification:', result.error);
-      }
-
-      return result;
-    } catch (error) {
-      console.error('Error sending new lead notification:', error);
-      return { success: false, error: error.message };
+    addClient(userId, ws) {
+        if (!this.clients.has(userId)) {
+            this.clients.set(userId, new Set());
+        }
+        this.clients.get(userId).add(ws);
+        ws.on('close', () => this.removeClient(userId, ws));
     }
-  }
 
-  async sendLeadStatusChangeNotification(lead, oldStatus, newStatus, company) {
-    try {
-      const settings = await this.getNotificationSettings(company._id);
-      
-      if (!settings || !settings.notifications?.leadStatusChange?.enabled || !settings.notifications?.leadStatusChange?.email) {
-        console.log('📧 Status change notification skipped - not enabled or no email configured');
-        return { success: false, message: 'Notification not enabled' };
-      }
-
-      const { subject, html, text } = this.generateLeadStatusChangeEmailContent(lead, oldStatus, newStatus, company);
-      
-      const result = await sendEmail(
-        settings.notifications.leadStatusChange.email,
-        subject,
-        html,
-        text,
-        { name: company.name, email: company.email }
-      );
-
-      if (result.success) {
-        console.log('✅ Lead status change notification sent successfully');
-      } else {
-        console.error('❌ Failed to send status change notification:', result.error);
-      }
-
-      return result;
-    } catch (error) {
-      console.error('Error sending lead status change notification:', error);
-      return { success: false, error: error.message };
+    removeClient(userId, ws) {
+        if (this.clients.has(userId)) {
+            this.clients.get(userId).delete(ws);
+            if (this.clients.get(userId).size === 0) {
+                this.clients.delete(userId);
+            }
+        }
     }
-  }
 
-  async sendLeadAssignmentNotification(lead, assignedToUser, company) {
-    try {
-      const settings = await this.getNotificationSettings(company._id);
-      
-      if (!settings || !settings.notifications?.leadAssignment?.enabled || !settings.notifications?.leadAssignment?.email) {
-        console.log('📧 Assignment notification skipped - not enabled or no email configured');
-        return { success: false, message: 'Notification not enabled' };
-      }
-
-      const { subject, html, text } = this.generateLeadAssignmentEmailContent(lead, assignedToUser, company);
-      
-      const result = await sendEmail(
-        settings.notifications.leadAssignment.email,
-        subject,
-        html,
-        text,
-        { name: company.name, email: company.email }
-      );
-
-      if (result.success) {
-        console.log('✅ Lead assignment notification sent successfully');
-      } else {
-        console.error('❌ Failed to send assignment notification:', result.error);
-      }
-
-      return result;
-    } catch (error) {
-      console.error('Error sending lead assignment notification:', error);
-      return { success: false, error: error.message };
+    async sendToUser(userId, notification) {
+        const userClients = this.clients.get(userId);
+        if (userClients) {
+            userClients.forEach(socket => {
+                if (socket.connected) {
+                    socket.emit('notification', notification);
+                }
+            });
+        }
     }
-  }
 
-  async sendReminderNotification(lead, company) {
-    try {
-      const settings = await this.getNotificationSettings(company._id);
-      
-      if (!settings || !settings.notifications?.reminder?.enabled || !settings.notifications?.reminder?.email) {
-        console.log('📧 Reminder notification skipped - not enabled or no email configured');
-        return { success: false, message: 'Notification not enabled' };
-      }
+    async createLeadNotification(lead, platform = 'manual') {
+        try {
+            console.log('📝 Creating notification for lead:', lead.name);
+            console.log('🎯 Platform:', platform);
+            console.log('🎯 Lead assignedTo:', lead.assignedTo);
+            console.log('🎯 Lead createdBy:', lead.createdBy);
+            console.log('🎯 Target user ID:', lead.assignedTo || lead.createdBy);
 
-      const { subject, html, text } = this.generateReminderEmailContent(lead, company);
-      
-      const result = await sendEmail(
-        settings.notifications.reminder.email,
-        subject,
-        html,
-        text,
-        { name: company.name, email: company.email }
-      );
+            const notification = await Notification.createLeadNotification(lead, platform);
+            console.log('📋 Notification created:', notification._id);
 
-      if (result.success) {
-        console.log('✅ Reminder notification sent successfully');
-      } else {
-        console.error('❌ Failed to send reminder notification:', result.error);
-      }
+            const targetUserId = lead.assignedTo || lead.createdBy;
+            console.log('🎯 Final target user ID:', targetUserId);
 
-      return result;
-    } catch (error) {
-      console.error('Error sending reminder notification:', error);
-      return { success: false, error: error.message };
+            if (targetUserId) {
+                console.log('📡 Sending real-time notification to user:', targetUserId);
+                // Send real-time notification
+                await this.sendToUser(targetUserId, notification);
+                console.log('✅ Real-time notification sent');
+
+                console.log('📧 Sending email notification to user:', targetUserId);
+                // Send email notification
+                const emailResult = await this.sendEmailNotification(notification, targetUserId);
+                console.log('📧 Email notification result:', emailResult);
+            } else {
+                console.log('⚠️ No target user found for notification');
+            }
+
+            return notification;
+        } catch (error) {
+            console.error('❌ Error creating lead notification:', error);
+            throw error;
+        }
     }
-  }
 
-  async sendReminderConfirmationNotification(lead, company) {
-    try {
-      const settings = await this.getNotificationSettings(company._id);
-      
-      if (!settings || !settings.notifications?.reminder?.enabled || !settings.notifications?.reminder?.email) {
-        console.log('📧 Reminder confirmation notification skipped - not enabled or no email configured');
-        return { success: false, message: 'Notification not enabled' };
-      }
+    async sendEmailNotification(notification, userId) {
+        try {
+            console.log('🔍 ===== EMAIL NOTIFICATION DEBUG START =====');
+            console.log('🔍 Looking up user settings for:', userId);
+            console.log('📋 Notification details:', {
+                id: notification._id,
+                title: notification.title,
+                type: notification.type,
+                platform: notification.platform
+            });
 
-      const { subject, html, text } = this.generateReminderConfirmationEmailContent(lead, company);
-      
-      const result = await sendEmail(
-        settings.notifications.reminder.email,
-        subject,
-        html,
-        text,
-        { name: company.name, email: company.email }
-      );
+            // Get user's notification settings and email
+            const user = await User.findById(userId).select('notificationEmail email notificationSettings');
+            console.log('👤 User found:', {
+                id: user._id,
+                email: user.email,
+                notificationEmail: user.notificationEmail,
+                hasSettings: !!user.notificationSettings,
+                settings: user.notificationSettings
+            });
 
-      if (result.success) {
-        console.log('✅ Reminder confirmation notification sent successfully');
-      } else {
-        console.error('❌ Failed to send reminder confirmation notification:', result.error);
-      }
+            const userEmail = user.notificationEmail || user.email;
+            console.log('📧 Final user email:', userEmail);
 
-      return result;
-    } catch (error) {
-      console.error('Error sending reminder confirmation notification:', error);
-      return { success: false, error: error.message };
+            if (!userEmail) {
+                console.log('❌ No email address found for user:', userId);
+                console.log('🔍 ===== EMAIL NOTIFICATION DEBUG END (NO EMAIL) =====');
+                return false;
+            }
+
+            // Check if user has email notifications enabled for this type
+            const notificationType = this.getNotificationTypeFromTitle(notification.title);
+            console.log('🔔 Notification type detected:', notificationType);
+            console.log('🔔 User email settings for this type:', user.notificationSettings?.email?.[notificationType]);
+
+            if (user.notificationSettings?.email?.[notificationType] === false) {
+                console.log('❌ Email notifications disabled for this type:', notificationType);
+                console.log('🔍 ===== EMAIL NOTIFICATION DEBUG END (DISABLED) =====');
+                return false;
+            }
+
+            console.log('✅ Email notifications enabled, sending email...');
+            console.log('📧 Sending to email:', userEmail);
+            console.log('📧 Notification title:', notification.title);
+            console.log('📧 Notification message:', notification.message);
+
+            // Send email
+            const emailSent = await sendNotificationEmail(notification, userEmail);
+            if (emailSent) {
+                console.log('✅ Email notification sent successfully to:', userEmail);
+            } else {
+                console.log('❌ Failed to send email notification');
+            }
+            console.log('🔍 ===== EMAIL NOTIFICATION DEBUG END =====');
+
+            return emailSent;
+        } catch (error) {
+            console.error('❌ Error sending email notification:', error);
+            console.error('❌ Error stack:', error.stack);
+            console.log('🔍 ===== EMAIL NOTIFICATION DEBUG END (ERROR) =====');
+            return false;
+        }
     }
-  }
 
-  async sendTestNotification(recipientEmail, company) {
-    try {
-      const subject = `Test Notification from ${company.name} CRM`;
-      const html = this.generateTestEmailHTML(company);
-      const text = this.generateTestEmailText(company);
-      
-      const result = await sendEmail(
-        recipientEmail,
-        subject,
-        html,
-        text,
-        { name: company.name, email: company.email }
-      );
-
-      if (result.success) {
-        console.log('✅ Test notification sent successfully');
-      } else {
-        console.error('❌ Failed to send test notification:', result.error);
-      }
-
-      return result;
-    } catch (error) {
-      console.error('Error sending test notification:', error);
-      return { success: false, error: error.message };
+    getNotificationTypeFromTitle(title) {
+        console.log('🔍 Analyzing notification title:', title);
+        if (title.includes('Reminder')) {
+            console.log('✅ Detected notification type: leadReminders');
+            return 'leadReminders';
+        }
+        if (title.includes('Task') && title.includes('Assigned')) {
+            console.log('✅ Detected notification type: taskAssignments');
+            return 'taskAssignments';
+        }
+        if (title.includes('Lead') && title.includes('Assigned')) {
+            console.log('✅ Detected notification type: leadAssignments');
+            return 'leadAssignments';
+        }
+        if (title.includes('Lead')) {
+            console.log('✅ Detected notification type: newLeads');
+            return 'newLeads';
+        }
+        if (title.includes('Property')) {
+            console.log('✅ Detected notification type: newProperties');
+            return 'newProperties';
+        }
+        if (title.includes('Task')) {
+            console.log('✅ Detected notification type: newTasks');
+            return 'newTasks';
+        }
+        if (title.includes('System')) {
+            console.log('✅ Detected notification type: systemUpdates');
+            return 'systemUpdates';
+        }
+        console.log('⚠️ Using default notification type: newLeads');
+        return 'newLeads'; // default
     }
-  }
 
-  generateNewLeadEmailContent(lead, company) {
-    const subject = `New Lead Alert: ${lead.name} from ${lead.source || 'Unknown'}`;
-    const html = this.generateNewLeadEmailHTML(lead, company);
-    const text = this.generateNewLeadEmailText(lead, company);
-    return { subject, html, text };
-  }
-
-  generateLeadStatusChangeEmailContent(lead, oldStatus, newStatus, company) {
-    const subject = `Lead Status Update: ${lead.name} - ${newStatus.toUpperCase()}`;
-    const html = this.generateLeadStatusChangeEmailHTML(lead, oldStatus, newStatus, company);
-    const text = this.generateLeadStatusChangeEmailText(lead, oldStatus, newStatus, company);
-    return { subject, html, text };
-  }
-
-  generateLeadAssignmentEmailContent(lead, assignedToUser, company) {
-    const subject = `Lead Assignment: ${lead.name} assigned to ${assignedToUser.name}`;
-    const html = this.generateLeadAssignmentEmailHTML(lead, assignedToUser, company);
-    const text = this.generateLeadAssignmentEmailText(lead, assignedToUser, company);
-    return { subject, html, text };
-  }
-
-  generateReminderEmailContent(lead, company) {
-    const reminderTime = new Date(lead.reminder.date).toLocaleString();
-    const subject = `⏰ Reminder: Follow up with ${lead.name}`;
-    const html = this.generateReminderEmailHTML(lead, company);
-    const text = this.generateReminderEmailText(lead, company);
-    return { subject, html, text };
-  }
-
-  generateReminderConfirmationEmailContent(lead, company) {
-    const reminderTime = new Date(lead.reminder.date).toLocaleString();
-    const subject = `✅ Reminder Set: Follow up with ${lead.name}`;
-    const html = this.generateReminderConfirmationEmailHTML(lead, company);
-    const text = this.generateReminderConfirmationEmailText(lead, company);
-    return { subject, html, text };
-  }
-
-  generateNewLeadEmailHTML(lead, company) {
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>New Lead Alert</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f4f4f4; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; margin: -30px -30px 30px -30px; }
-          .header h1 { margin: 0; font-size: 24px; }
-          .lead-details { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          .detail-row { display: flex; margin-bottom: 10px; }
-          .detail-label { font-weight: bold; width: 120px; color: #555; }
-          .detail-value { flex: 1; }
-          .status-badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; text-transform: uppercase; }
-          .status-new { background: #e3f2fd; color: #1976d2; }
-          .priority-hot { color: #d32f2f; font-weight: bold; }
-          .priority-warm { color: #f57c00; font-weight: bold; }
-          .priority-cold { color: #1976d2; font-weight: bold; }
-          .priority-ice { color: #616161; font-weight: bold; }
-          .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #666; }
-          .cta-button { display: inline-block; background: #667eea; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>🎉 New Lead Alert!</h1>
-            <p>A new lead has been added to your CRM system</p>
-          </div>
-          
-          <div class="lead-details">
-            <h3>Lead Information</h3>
-            <div class="detail-row">
-              <div class="detail-label">Name:</div>
-              <div class="detail-value"><strong>${lead.name}</strong></div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Email:</div>
-              <div class="detail-value">${lead.email}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Phone:</div>
-              <div class="detail-value">${lead.phone || 'Not provided'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Source:</div>
-              <div class="detail-value">${lead.source || 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Status:</div>
-              <div class="detail-value">
-                <span class="status-badge status-new">${lead.status}</span>
-              </div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Project:</div>
-              <div class="detail-value">${lead.projectName || 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Budget:</div>
-              <div class="detail-value">${lead.budget ? `$${lead.budget.toLocaleString()}` : 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Property Type:</div>
-              <div class="detail-value">${lead.propertyType || 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Created:</div>
-              <div class="detail-value">${new Date(lead.createdAt).toLocaleString()}</div>
-            </div>
-            ${lead.scoring ? `
-            <div class="detail-row">
-              <div class="detail-label">Lead Score:</div>
-              <div class="detail-value">
-                <strong>${lead.scoring.score}/${lead.scoring.maxScore}</strong>
-                <span class="priority-${lead.scoring.priority}">(${lead.scoring.priority.toUpperCase()})</span>
-              </div>
-            </div>
-            ` : ''}
-          </div>
-          
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/leads" class="cta-button">
-              View Lead in CRM
-            </a>
-          </div>
-          
-          <div class="footer">
-            <p><strong>Company:</strong> ${company.name}</p>
-            <p>This is an automated notification from your Real Estate CRM system.</p>
-            <p>Please log in to your CRM to view more details and take action on this lead.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-  }
-
-  generateNewLeadEmailText(lead, company) {
-    return `
-New Lead Alert: ${lead.name} from ${lead.source || 'Unknown'}
-
-A new lead has been added to your CRM system for ${company.name}.
-
-LEAD DETAILS:
-Name: ${lead.name}
-Email: ${lead.email}
-Phone: ${lead.phone || 'Not provided'}
-Source: ${lead.source || 'Not specified'}
-Status: ${lead.status}
-Project: ${lead.projectName || 'Not specified'}
-Budget: ${lead.budget ? `$${lead.budget.toLocaleString()}` : 'Not specified'}
-Property Type: ${lead.propertyType || 'Not specified'}
-Created: ${new Date(lead.createdAt).toLocaleString()}
-${lead.scoring ? `Lead Score: ${lead.scoring.score}/${lead.scoring.maxScore} (${lead.scoring.priority.toUpperCase()})` : ''}
-
-Please log in to your CRM to view more details and take action on this lead.
-
-Company: ${company.name}
-This is an automated notification from your Real Estate CRM system.
-    `;
-  }
-
-  generateLeadStatusChangeEmailHTML(lead, oldStatus, newStatus, company) {
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Lead Status Update</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f4f4f4; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #4caf50 0%, #45a049 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; margin: -30px -30px 30px -30px; }
-          .header h1 { margin: 0; font-size: 24px; }
-          .status-change { background: #e8f5e8; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; }
-          .old-status { color: #666; text-decoration: line-through; }
-          .new-status { color: #4caf50; font-weight: bold; font-size: 18px; }
-          .lead-details { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          .detail-row { display: flex; margin-bottom: 10px; }
-          .detail-label { font-weight: bold; width: 120px; color: #555; }
-          .detail-value { flex: 1; }
-          .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #666; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>📈 Lead Status Updated</h1>
-            <p>The status for lead ${lead.name} has been changed</p>
-          </div>
-          
-          <div class="status-change">
-            <p>Status changed from <span class="old-status">${oldStatus}</span> to <span class="new-status">${newStatus}</span></p>
-          </div>
-          
-          <div class="lead-details">
-            <h3>Lead Information</h3>
-            <div class="detail-row">
-              <div class="detail-label">Name:</div>
-              <div class="detail-value"><strong>${lead.name}</strong></div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Email:</div>
-              <div class="detail-value">${lead.email}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Phone:</div>
-              <div class="detail-value">${lead.phone || 'Not provided'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Updated:</div>
-              <div class="detail-value">${new Date().toLocaleString()}</div>
-            </div>
-          </div>
-          
-          <div class="footer">
-            <p><strong>Company:</strong> ${company.name}</p>
-            <p>This is an automated notification from your Real Estate CRM system.</p>
-            <p>Please log in to your CRM to view more details.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-  }
-
-  generateLeadStatusChangeEmailText(lead, oldStatus, newStatus, company) {
-    return `
-Lead Status Update: ${lead.name} - ${newStatus.toUpperCase()}
-
-The status for lead ${lead.name} in your CRM for ${company.name} has been updated.
-
-STATUS CHANGE:
-From: ${oldStatus}
-To: ${newStatus}
-
-LEAD DETAILS:
-Name: ${lead.name}
-Email: ${lead.email}
-Phone: ${lead.phone || 'Not provided'}
-Updated: ${new Date().toLocaleString()}
-
-Please log in to your CRM to view more details.
-
-Company: ${company.name}
-This is an automated notification from your Real Estate CRM system.
-    `;
-  }
-
-  generateLeadAssignmentEmailHTML(lead, assignedToUser, company) {
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Lead Assignment</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f4f4f4; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; margin: -30px -30px 30px -30px; }
-          .header h1 { margin: 0; font-size: 24px; }
-          .assignment-info { background: #fff3e0; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; }
-          .assigned-to { color: #f57c00; font-weight: bold; font-size: 18px; }
-          .lead-details { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          .detail-row { display: flex; margin-bottom: 10px; }
-          .detail-label { font-weight: bold; width: 120px; color: #555; }
-          .detail-value { flex: 1; }
-          .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #666; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>👤 Lead Assigned</h1>
-            <p>Lead ${lead.name} has been assigned to a team member</p>
-          </div>
-          
-          <div class="assignment-info">
-            <p>Assigned to: <span class="assigned-to">${assignedToUser.name}</span></p>
-            <p>Email: ${assignedToUser.email}</p>
-            <p>Assigned on: ${new Date().toLocaleString()}</p>
-          </div>
-          
-          <div class="lead-details">
-            <h3>Lead Information</h3>
-            <div class="detail-row">
-              <div class="detail-label">Name:</div>
-              <div class="detail-value"><strong>${lead.name}</strong></div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Email:</div>
-              <div class="detail-value">${lead.email}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Phone:</div>
-              <div class="detail-value">${lead.phone || 'Not provided'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Status:</div>
-              <div class="detail-value">${lead.status}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Project:</div>
-              <div class="detail-value">${lead.projectName || 'Not specified'}</div>
-            </div>
-          </div>
-          
-          <div class="footer">
-            <p><strong>Company:</strong> ${company.name}</p>
-            <p>This is an automated notification from your Real Estate CRM system.</p>
-            <p>Please log in to your CRM to view more details and manage this lead.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-  }
-
-  generateLeadAssignmentEmailText(lead, assignedToUser, company) {
-    return `
-Lead Assignment: ${lead.name} assigned to ${assignedToUser.name}
-
-Lead ${lead.name} in your CRM for ${company.name} has been assigned to ${assignedToUser.name}.
-
-ASSIGNMENT DETAILS:
-Assigned to: ${assignedToUser.name}
-Email: ${assignedToUser.email}
-Assigned on: ${new Date().toLocaleString()}
-
-LEAD DETAILS:
-Name: ${lead.name}
-Email: ${lead.email}
-Phone: ${lead.phone || 'Not provided'}
-Status: ${lead.status}
-Project: ${lead.projectName || 'Not specified'}
-
-Please log in to your CRM to view more details and manage this lead.
-
-Company: ${company.name}
-This is an automated notification from your Real Estate CRM system.
-    `;
-  }
-
-  generateTestEmailHTML(company) {
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Test Email</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f4f4f4; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #2196f3 0%, #1976d2 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; margin: -30px -30px 30px -30px; }
-          .header h1 { margin: 0; font-size: 24px; }
-          .success-message { background: #e8f5e8; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; }
-          .checkmark { color: #4caf50; font-size: 48px; margin-bottom: 10px; }
-          .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #666; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>✅ Test Email Successful!</h1>
-            <p>Your email notification system is working correctly</p>
-          </div>
-          
-          <div class="success-message">
-            <div class="checkmark">✓</div>
-            <h3>Email Configuration Verified</h3>
-            <p>This is a test email from your <strong>${company.name}</strong> CRM notification system.</p>
-            <p>If you received this email, your notification settings are properly configured and working.</p>
-          </div>
-          
-          <div class="footer">
-            <p><strong>Company:</strong> ${company.name}</p>
-            <p>This is a test notification from your Real Estate CRM system.</p>
-            <p>You can now receive automated notifications for new leads, status changes, and assignments.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-  }
-
-  generateTestEmailText(company) {
-    return `
-Test Email Successful!
-
-This is a test email from your ${company.name} CRM notification system.
-
-✓ Email Configuration Verified
-
-If you received this email, your notification settings are properly configured and working.
-
-You can now receive automated notifications for:
-- New leads added to the CRM
-- Lead status changes
-- Lead assignments to team members
-
-Company: ${company.name}
-This is a test notification from your Real Estate CRM system.
-    `;
-  }
-
-  generateReminderEmailHTML(lead, company) {
-    const reminderTime = new Date(lead.reminder.date).toLocaleString();
-    const timeUntilReminder = this.getTimeUntilReminder(lead.reminder.date);
-    
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Reminder Alert</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f4f4f4; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #ff6b35 0%, #f7931e 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; margin: -30px -30px 30px -30px; }
-          .header h1 { margin: 0; font-size: 24px; }
-          .reminder-alert { background: #fff3e0; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; border-left: 4px solid #ff6b35; }
-          .reminder-time { color: #ff6b35; font-weight: bold; font-size: 18px; }
-          .reminder-message { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0; font-style: italic; }
-          .lead-details { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          .detail-row { display: flex; margin-bottom: 10px; }
-          .detail-label { font-weight: bold; width: 120px; color: #555; }
-          .detail-value { flex: 1; }
-          .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #666; }
-          .cta-button { display: inline-block; background: #ff6b35; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>⏰ Reminder Alert!</h1>
-            <p>It's time to follow up with a lead</p>
-          </div>
-          
-          <div class="reminder-alert">
-            <h3>Reminder Time: <span class="reminder-time">${reminderTime}</span></h3>
-            <p>${timeUntilReminder}</p>
-            ${lead.reminder.message ? `
-            <div class="reminder-message">
-              <strong>Reminder Note:</strong> ${lead.reminder.message}
-            </div>
-            ` : ''}
-          </div>
-          
-          <div class="lead-details">
-            <h3>Lead Information</h3>
-            <div class="detail-row">
-              <div class="detail-label">Name:</div>
-              <div class="detail-value"><strong>${lead.name}</strong></div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Email:</div>
-              <div class="detail-value">${lead.email}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Phone:</div>
-              <div class="detail-value">${lead.phone || 'Not provided'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Status:</div>
-              <div class="detail-value">${lead.status}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Project:</div>
-              <div class="detail-value">${lead.projectName || 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Budget:</div>
-              <div class="detail-value">${lead.budget ? `$${lead.budget.toLocaleString()}` : 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Property Type:</div>
-              <div class="detail-value">${lead.propertyType || 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Source:</div>
-              <div class="detail-value">${lead.source || 'Not specified'}</div>
-            </div>
-            ${lead.assignedTo ? `
-            <div class="detail-row">
-              <div class="detail-label">Assigned To:</div>
-              <div class="detail-value">${lead.assignedTo.name}</div>
-            </div>
-            ` : ''}
-          </div>
-          
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/leads" class="cta-button">
-              View Lead in CRM
-            </a>
-          </div>
-          
-          <div class="footer">
-            <p><strong>Company:</strong> ${company.name}</p>
-            <p>This is an automated reminder from your Real Estate CRM system.</p>
-            <p>Please log in to your CRM to view more details and take action on this lead.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-  }
-
-  generateReminderEmailText(lead, company) {
-    const reminderTime = new Date(lead.reminder.date).toLocaleString();
-    const timeUntilReminder = this.getTimeUntilReminder(lead.reminder.date);
-    
-    return `
-⏰ REMINDER: Follow up with ${lead.name}
-
-It's time to follow up with a lead in your CRM for ${company.name}.
-
-REMINDER DETAILS:
-Reminder Time: ${reminderTime}
-${timeUntilReminder}
-${lead.reminder.message ? `Reminder Note: ${lead.reminder.message}` : ''}
-
-LEAD DETAILS:
-Name: ${lead.name}
-Email: ${lead.email}
-Phone: ${lead.phone || 'Not provided'}
-Status: ${lead.status}
-Project: ${lead.projectName || 'Not specified'}
-Budget: ${lead.budget ? `$${lead.budget.toLocaleString()}` : 'Not specified'}
-Property Type: ${lead.propertyType || 'Not specified'}
-Source: ${lead.source || 'Not specified'}
-${lead.assignedTo ? `Assigned To: ${lead.assignedTo.name}` : ''}
-
-Please log in to your CRM to view more details and take action on this lead.
-
-Company: ${company.name}
-This is an automated reminder from your Real Estate CRM system.
-    `;
-  }
-
-  getTimeUntilReminder(reminderDate) {
-    const now = new Date();
-    const reminder = new Date(reminderDate);
-    const diffMs = reminder - now;
-    
-    if (diffMs < 0) {
-      return 'This reminder is overdue!';
+    detectPlatform(leadData) {
+        const { source, utmSource, sourceUrl } = leadData;
+        if (utmSource) {
+            switch (utmSource.toLowerCase()) {
+                case 'google': case 'googleads': return 'google_ads';
+                case 'facebook': case 'meta': return 'meta_ads';
+                case 'hubspot': return 'hubspot';
+                case 'salesforce': return 'salesforce';
+            }
+        }
+        if (source) {
+            switch (source.toLowerCase()) {
+                case 'website': case 'web': return 'website';
+                case 'google_ads': return 'google_ads';
+                case 'facebook_ads': case 'meta_ads': return 'meta_ads';
+                case 'hubspot': return 'hubspot';
+                case 'salesforce': return 'salesforce';
+            }
+        }
+        if (sourceUrl) {
+            if (sourceUrl.includes('googleads') || sourceUrl.includes('gclid=')) return 'google_ads';
+            if (sourceUrl.includes('facebook') || sourceUrl.includes('fbclid=')) return 'meta_ads';
+            return 'website';
+        }
+        return 'manual';
     }
-    
-    const diffMinutes = Math.floor(diffMs / (1000 * 60));
-    const diffHours = Math.floor(diffMinutes / 60);
-    const diffDays = Math.floor(diffHours / 24);
-    
-    if (diffDays > 0) {
-      return `Reminder is in ${diffDays} day${diffDays > 1 ? 's' : ''}`;
-    } else if (diffHours > 0) {
-      return `Reminder is in ${diffHours} hour${diffHours > 1 ? 's' : ''}`;
-    } else {
-      return `Reminder is in ${diffMinutes} minute${diffMinutes > 1 ? 's' : ''}`;
+
+    async createLeadAssignmentNotification(lead, assignedTo, assignedBy) {
+        try {
+            console.log('🔍 ===== LEAD ASSIGNMENT NOTIFICATION DEBUG START =====');
+            console.log('📝 Creating lead assignment notification for:', lead.name);
+            console.log('👤 Assigned to:', assignedTo.name, '(ID:', assignedTo._id, ')');
+            console.log('👤 Assigned by:', assignedBy.name, '(ID:', assignedBy._id, ')');
+            console.log('🏢 Company ID:', lead.companyId);
+
+            const notification = await Notification.createLeadAssignmentNotification(lead, assignedTo, assignedBy);
+            console.log('📋 Lead assignment notification created:', notification._id);
+            console.log('📋 Notification details:', {
+                title: notification.title,
+                message: notification.message,
+                type: notification.type,
+                platform: notification.platform,
+                priority: notification.priority
+            });
+
+            // Send real-time notification
+            console.log('📡 Sending real-time lead assignment notification to user:', assignedTo._id);
+            await this.sendToUser(assignedTo._id, notification);
+            console.log('✅ Real-time lead assignment notification sent');
+
+            // Send email notification
+            console.log('📧 Sending lead assignment email notification to user:', assignedTo._id);
+            const emailResult = await this.sendEmailNotification(notification, assignedTo._id);
+            console.log('📧 Lead assignment email notification result:', emailResult);
+            console.log('🔍 ===== LEAD ASSIGNMENT NOTIFICATION DEBUG END =====');
+
+            return notification;
+        } catch (error) {
+            console.error('❌ Error creating lead assignment notification:', error);
+            console.error('❌ Error stack:', error.stack);
+            throw error;
+        }
     }
-  }
 
-  generateReminderConfirmationEmailHTML(lead, company) {
-    const reminderTime = new Date(lead.reminder.date).toLocaleString();
-    const timeUntilReminder = this.getTimeUntilReminder(lead.reminder.date);
-    
-    return `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Reminder Confirmation</title>
-        <style>
-          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 20px; background-color: #f4f4f4; }
-          .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 0 20px rgba(0,0,0,0.1); }
-          .header { background: linear-gradient(135deg, #4caf50 0%, #45a049 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; margin: -30px -30px 30px -30px; }
-          .header h1 { margin: 0; font-size: 24px; }
-          .confirmation-alert { background: #e8f5e8; padding: 20px; border-radius: 8px; margin: 20px 0; text-align: center; border-left: 4px solid #4caf50; }
-          .reminder-time { color: #4caf50; font-weight: bold; font-size: 18px; }
-          .reminder-message { background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0; font-style: italic; }
-          .lead-details { background: #f8f9fa; padding: 20px; border-radius: 8px; margin: 20px 0; }
-          .detail-row { display: flex; margin-bottom: 10px; }
-          .detail-label { font-weight: bold; width: 120px; color: #555; }
-          .detail-value { flex: 1; }
-          .footer { margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee; font-size: 14px; color: #666; }
-          .cta-button { display: inline-block; background: #4caf50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; margin: 20px 0; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>✅ Reminder Set Successfully!</h1>
-            <p>Your reminder has been scheduled and you'll be notified when it's due</p>
-          </div>
-          
-          <div class="confirmation-alert">
-            <h3>Reminder Scheduled for: <span class="reminder-time">${reminderTime}</span></h3>
-            <p>${timeUntilReminder}</p>
-            ${lead.reminder.message ? `
-            <div class="reminder-message">
-              <strong>Reminder Note:</strong> ${lead.reminder.message}
-            </div>
-            ` : ''}
-          </div>
-          
-          <div class="lead-details">
-            <h3>Lead Information</h3>
-            <div class="detail-row">
-              <div class="detail-label">Name:</div>
-              <div class="detail-value"><strong>${lead.name}</strong></div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Email:</div>
-              <div class="detail-value">${lead.email}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Phone:</div>
-              <div class="detail-value">${lead.phone || 'Not provided'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Status:</div>
-              <div class="detail-value">${lead.status}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Project:</div>
-              <div class="detail-value">${lead.projectName || 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Budget:</div>
-              <div class="detail-value">${lead.budget ? `$${lead.budget.toLocaleString()}` : 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Property Type:</div>
-              <div class="detail-value">${lead.propertyType || 'Not specified'}</div>
-            </div>
-            <div class="detail-row">
-              <div class="detail-label">Source:</div>
-              <div class="detail-value">${lead.source || 'Not specified'}</div>
-            </div>
-            ${lead.assignedTo ? `
-            <div class="detail-row">
-              <div class="detail-label">Assigned To:</div>
-              <div class="detail-value">${lead.assignedTo.name}</div>
-            </div>
-            ` : ''}
-          </div>
-          
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${process.env.FRONTEND_URL || 'http://localhost:5173'}/leads" class="cta-button">
-              View Lead in CRM
-            </a>
-          </div>
-          
-          <div class="footer">
-            <p><strong>Company:</strong> ${company.name}</p>
-            <p>This is a confirmation from your Real Estate CRM system.</p>
-            <p>You will receive another notification when the reminder is due.</p>
-          </div>
-        </div>
-      </body>
-      </html>
-    `;
-  }
+    async createTaskAssignmentNotification(task, assignedTo, assignedBy) {
+        try {
+            console.log('🔍 ===== TASK ASSIGNMENT NOTIFICATION DEBUG START =====');
+            console.log('📝 Creating task assignment notification for:', task.title);
+            console.log('👤 Assigned to:', assignedTo.name, '(ID:', assignedTo._id, ')');
+            console.log('👤 Assigned by:', assignedBy.name, '(ID:', assignedBy._id, ')');
+            console.log('🏢 Company ID:', task.companyId);
 
-  generateReminderConfirmationEmailText(lead, company) {
-    const reminderTime = new Date(lead.reminder.date).toLocaleString();
-    const timeUntilReminder = this.getTimeUntilReminder(lead.reminder.date);
-    
-    return `
-✅ REMINDER SET: Follow up with ${lead.name}
+            const notification = await Notification.createTaskAssignmentNotification(task, assignedTo, assignedBy);
+            console.log('📋 Task assignment notification created:', notification._id);
+            console.log('📋 Notification details:', {
+                title: notification.title,
+                message: notification.message,
+                type: notification.type,
+                platform: notification.platform,
+                priority: notification.priority
+            });
 
-Your reminder has been successfully scheduled in your CRM for ${company.name}.
+            // Send real-time notification
+            console.log('📡 Sending real-time task assignment notification to user:', assignedTo._id);
+            await this.sendToUser(assignedTo._id, notification);
+            console.log('✅ Real-time task assignment notification sent');
 
-REMINDER DETAILS:
-Scheduled for: ${reminderTime}
-${timeUntilReminder}
-${lead.reminder.message ? `Reminder Note: ${lead.reminder.message}` : ''}
+            // Send email notification
+            console.log('📧 Sending task assignment email notification to user:', assignedTo._id);
+            const emailResult = await this.sendEmailNotification(notification, assignedTo._id);
+            console.log('📧 Task assignment email notification result:', emailResult);
+            console.log('🔍 ===== TASK ASSIGNMENT NOTIFICATION DEBUG END =====');
 
-LEAD DETAILS:
-Name: ${lead.name}
-Email: ${lead.email}
-Phone: ${lead.phone || 'Not provided'}
-Status: ${lead.status}
-Project: ${lead.projectName || 'Not specified'}
-Budget: ${lead.budget ? `$${lead.budget.toLocaleString()}` : 'Not specified'}
-Property Type: ${lead.propertyType || 'Not specified'}
-Source: ${lead.source || 'Not specified'}
-${lead.assignedTo ? `Assigned To: ${lead.assignedTo.name}` : ''}
+            return notification;
+        } catch (error) {
+            console.error('❌ Error creating task assignment notification:', error);
+            console.error('❌ Error stack:', error.stack);
+            throw error;
+        }
+    }
 
-You will receive another notification when the reminder is due.
+    async createLeadReminderNotification(lead, assignedTo) {
+        try {
+            console.log('🔍 ===== LEAD REMINDER NOTIFICATION DEBUG START =====');
+            console.log('📝 Creating lead reminder notification for:', lead.name);
+            console.log('👤 Assigned to:', assignedTo.name, '(ID:', assignedTo._id, ')');
+            console.log('🏢 Company ID:', lead.companyId);
+            console.log('⏰ Reminder date:', lead.reminder.date);
 
-Company: ${company.name}
-This is a confirmation from your Real Estate CRM system.
-    `;
-  }
+            const notification = await Notification.createLeadReminderNotification(lead, assignedTo);
+            console.log('📋 Lead reminder notification created:', notification._id);
+            console.log('📋 Notification details:', {
+                title: notification.title,
+                message: notification.message,
+                type: notification.type,
+                platform: notification.platform,
+                priority: notification.priority
+            });
+
+            // Send real-time notification
+            console.log('📡 Sending real-time lead reminder notification to user:', assignedTo._id);
+            await this.sendToUser(assignedTo._id, notification);
+            console.log('✅ Real-time lead reminder notification sent');
+
+            // Send email notification
+            console.log('📧 Sending lead reminder email notification to user:', assignedTo._id);
+            const emailResult = await this.sendEmailNotification(notification, assignedTo._id);
+            console.log('📧 Lead reminder email notification result:', emailResult);
+            console.log('🔍 ===== LEAD REMINDER NOTIFICATION DEBUG END =====');
+
+            return notification;
+        } catch (error) {
+            console.error('❌ Error creating lead reminder notification:', error);
+            console.error('❌ Error stack:', error.stack);
+            throw error;
+        }
+    }
 }
 
-module.exports = new NotificationService();
-
-
-
+const notificationService = new NotificationService();
+module.exports = notificationService;
